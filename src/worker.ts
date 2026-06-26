@@ -3,14 +3,14 @@ import { QueueWorker } from './infrastructure/queue/worker.js';
 import { ProcessReviewUseCase } from './application/use-cases/process-review.use-case.js';
 import { GitService } from './infrastructure/git/git.service.js';
 import { WorkspaceManager } from './infrastructure/git/workspace.manager.js';
-import { NineRouterService } from './infrastructure/ai/nine-router.service.js';
+import { createRunner } from './infrastructure/ai/runner.factory.js';
 import { promptService } from './application/services/prompt.service.js';
 import { parserService } from './application/services/parser.service.js';
 import { githubService } from './infrastructure/vcs/github.service.js';
 import { gitlabService } from './infrastructure/vcs/gitlab.service.js';
 import type { JobPayload } from './domain/interfaces/queue.interface.js';
 
-const aiProvider = new NineRouterService(parserService);
+const aiProvider = createRunner(parserService);
 
 const useCase = new ProcessReviewUseCase({
   gitService: new GitService(),

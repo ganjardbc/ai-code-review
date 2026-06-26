@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const logLevels = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
 const nodeEnvs = ['development', 'production', 'test'] as const;
+const aiRunners = ['direct', 'opencode'] as const;
 
 export const configSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
@@ -10,15 +11,18 @@ export const configSchema = z.object({
 
   REDIS_URL: z.url({ message: 'REDIS_URL must be a valid URL' }),
 
-  NINE_ROUTER_API_KEY: z
-    .string({ error: 'NINE_ROUTER_API_KEY is required' })
-    .min(1, 'NINE_ROUTER_API_KEY cannot be empty'),
+  AI_RUNNER: z.enum(aiRunners).default('direct'),
+
+  NINE_ROUTER_API_KEY: z.string().min(1, 'NINE_ROUTER_API_KEY cannot be empty').optional(),
   NINE_ROUTER_BASE_URL: z
     .url({ message: 'NINE_ROUTER_BASE_URL must be a valid URL' })
     .default('https://api.9router.com/v1'),
   NINE_ROUTER_MODEL: z
     .string()
     .default('opencode'),
+
+  OPENCODE_COMMAND: z.string().default('opencode'),
+  OPENCODE_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
 
   GITHUB_WEBHOOK_SECRET: z
     .string({ error: 'GITHUB_WEBHOOK_SECRET is required' })
@@ -38,6 +42,14 @@ export const configSchema = z.object({
 
   QUEUE_JOB_TTL_SECONDS: z.coerce.number().int().positive().default(86400),
   QUEUE_MAX_JOBS_RETAINED: z.coerce.number().int().positive().default(100),
+}).superRefine((data, ctx) => {
+  if (data.AI_RUNNER === 'direct' && !data.NINE_ROUTER_API_KEY) {
+    ctx.addIssue({
+      code: 'custom' as const,
+      path: ['NINE_ROUTER_API_KEY'],
+      message: 'NINE_ROUTER_API_KEY is required when AI_RUNNER=direct',
+    });
+  }
 });
 
 export type AppConfig = z.infer<typeof configSchema>;

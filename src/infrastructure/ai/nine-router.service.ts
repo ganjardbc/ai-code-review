@@ -37,7 +37,7 @@ export class NineRouterService implements IAiProvider {
       baseURL: config.NINE_ROUTER_BASE_URL,
       timeout: 120_000,
       headers: {
-        'Authorization': `Bearer ${config.NINE_ROUTER_API_KEY}`,
+        'Authorization': `Bearer ${config.NINE_ROUTER_API_KEY ?? ''}`,
         'Content-Type': 'application/json',
       },
     });
