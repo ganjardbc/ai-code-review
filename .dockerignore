@@ -1,0 +1,15 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*.log
+.git
+.gitignore
+tests
+docs
+planning
+specs
+prompts
+coverage
+.nyc_output
