@@ -29,7 +29,7 @@ RUN pnpm install --frozen-lockfile --prod
 FROM node:22-slim AS runner
 
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-  git ca-certificates \
+  git ca-certificates wget \
   && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g opencode-ai
@@ -51,5 +51,5 @@ ENV WORKSPACE_DIR=/workspace
 
 EXPOSE 3000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://localhost:3000/health || exit 1
+# HEALTHCHECK is defined in docker-compose.yml for the api service only.
+# The worker doesn't serve HTTP, so it has no healthcheck.
