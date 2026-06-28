@@ -26,11 +26,15 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
 # ─── Stage 3: Runner ──────────────────────────────────────────────────────────
-FROM node:22-alpine AS runner
+FROM node:22-slim AS runner
 
-RUN apk add --no-cache git
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+  git ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN npm install -g opencode-ai
+
+RUN groupadd -r appgroup && useradd -r -m -d /home/appuser -g appgroup appuser
 
 WORKDIR /app
 
