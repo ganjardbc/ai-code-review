@@ -1,5 +1,5 @@
 import { Octokit } from '@octokit/rest';
-import type { IGithubClient, PostReviewOptions } from '../../domain/interfaces/vcs-client.interface.js';
+import type { IGithubClient, PostReviewOptions, PullRequestInfo } from '../../domain/interfaces/vcs-client.interface.js';
 import { config } from '../../config/index.js';
 import { logger } from '../logging/logger.js';
 
@@ -50,6 +50,16 @@ export class GithubService implements IGithubClient {
       });
       throw err;
     }
+  }
+
+  async getPullRequest(owner: string, repo: string, pullNumber: number): Promise<PullRequestInfo> {
+    const { data } = await this.octokit.pulls.get({ owner, repo, pull_number: pullNumber });
+    return {
+      headRef: data.head.ref,
+      baseRef: data.base.ref,
+      headSha: data.head.sha,
+      cloneUrl: data.base.repo.clone_url,
+    };
   }
 }
 

@@ -1,5 +1,52 @@
 import { z } from 'zod';
 
+export const githubIssueCommentSchema = z.object({
+  action: z.string(),
+  issue: z.object({
+    number: z.number().int().positive(),
+    pull_request: z.object({}).passthrough().optional(),
+  }),
+  comment: z.object({
+    body: z.string(),
+  }),
+  repository: z.object({
+    name: z.string().min(1),
+    owner: z.object({
+      login: z.string().min(1),
+    }),
+    clone_url: z.url(),
+  }),
+});
+
+export type GithubIssueCommentPayload = z.infer<typeof githubIssueCommentSchema>;
+
+export const gitlabNoteHookSchema = z.object({
+  object_kind: z.literal('note'),
+  object_attributes: z.object({
+    note: z.string(),
+    noteable_type: z.string(),
+  }),
+  merge_request: z
+    .object({
+      iid: z.number().int().positive(),
+      source_branch: z.string().min(1),
+      target_branch: z.string().min(1),
+      last_commit: z.object({ id: z.string().min(1) }),
+      target: z.object({ git_http_url: z.url() }),
+      diff_refs: z
+        .object({
+          base_sha: z.string().min(1),
+          start_sha: z.string().min(1),
+          head_sha: z.string().min(1),
+        })
+        .optional(),
+    })
+    .optional(),
+  project: z.object({ id: z.number().int().positive() }),
+});
+
+export type GitlabNoteHookPayload = z.infer<typeof gitlabNoteHookSchema>;
+
 export const githubWebhookSchema = z.object({
   action: z.string(),
   number: z.number().int().positive(),

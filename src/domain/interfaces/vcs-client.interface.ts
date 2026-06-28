@@ -17,8 +17,16 @@ export interface PostMrReviewOptions {
   comments: AiReviewComment[];
 }
 
+export interface PullRequestInfo {
+  headRef: string;
+  baseRef: string;
+  headSha: string;
+  cloneUrl: string;
+}
+
 export interface IGithubClient {
   postReview(options: PostReviewOptions): Promise<void>;
+  getPullRequest(owner: string, repo: string, pullNumber: number): Promise<PullRequestInfo>;
 }
 
 export interface IGitlabClient {

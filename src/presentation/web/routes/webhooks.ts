@@ -8,14 +8,18 @@ import {
 } from '../../../infrastructure/vcs/security.js';
 import {
   githubWebhookSchema,
+  githubIssueCommentSchema,
   gitlabWebhookSchema,
+  gitlabNoteHookSchema,
 } from '../../dto/webhook.dto.js';
 import { logger } from '../../../infrastructure/logging/logger.js';
 import { reviewQueue } from '../../../infrastructure/queue/client.js';
+import { githubService } from '../../../infrastructure/vcs/github.service.js';
 import type { JobPayload } from '../../../domain/interfaces/queue.interface.js';
 
 const GITHUB_PR_ACTIONS = new Set(['opened', 'reopened', 'synchronize']);
 const GITLAB_MR_ACTIONS = new Set(['open', 'reopen', 'update']);
+const REVIEW_COMMAND = /^\s*\/review\b/i;
 
 export async function webhookRoutes(app: FastifyInstance): Promise<void> {
   app.post('/github', async (request, reply) => {
@@ -28,6 +32,78 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const event = request.headers['x-github-event'] as string | undefined;
+
+    if (event === 'issue_comment') {
+      const parsed = githubIssueCommentSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          statusCode: 400,
+          error: 'Bad Request',
+          message: parsed.error.issues[0]?.message ?? 'Invalid payload',
+        });
+      }
+
+      const payload = parsed.data;
+
+      if (payload.action !== 'created') {
+        return reply.status(200).send({ status: 'ignored', reason: 'Not a new comment' });
+      }
+
+      if (!payload.issue.pull_request) {
+        return reply.status(200).send({ status: 'ignored', reason: 'Comment on issue, not PR' });
+      }
+
+      if (!REVIEW_COMMAND.test(payload.comment.body)) {
+        return reply.status(200).send({ status: 'ignored', reason: 'No /review command found' });
+      }
+
+      const owner = payload.repository.owner.login;
+      const repo = payload.repository.name;
+      const prNumber = payload.issue.number;
+
+      let pr: { headRef: string; baseRef: string; headSha: string; cloneUrl: string };
+      try {
+        pr = await githubService.getPullRequest(owner, repo, prNumber);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error('Failed to fetch PR for comment trigger', err instanceof Error ? err : new Error(msg), { owner, repo, prNumber });
+        return reply.status(500).send({ statusCode: 500, error: 'Internal Server Error', message: 'Failed to fetch PR details' });
+      }
+
+      if (!isSafeBranchName(pr.headRef) || !isSafeBranchName(pr.baseRef)) {
+        return reply.status(400).send({
+          statusCode: 400,
+          error: 'Bad Request',
+          message: 'Branch name contains invalid characters.',
+        });
+      }
+
+      const jobId = `git-${randomUUID()}`;
+      const jobData: JobPayload = {
+        jobId,
+        provider: 'github',
+        cloneUrl: pr.cloneUrl,
+        headRef: pr.headRef,
+        baseRef: pr.baseRef,
+        headSha: pr.headSha,
+        prNumber,
+        repoOwner: owner,
+        repoName: repo,
+      };
+
+      const queuedId = await reviewQueue.addJob('github-review', jobData as unknown as Record<string, unknown>);
+
+      logger.info('GitHub PR comment trigger enqueued', undefined, {
+        jobId: queuedId,
+        repo: `${owner}/${repo}`,
+        pr: prNumber,
+        head: pr.headRef,
+        base: pr.baseRef,
+      });
+
+      return reply.status(202).send({ status: 'enqueued', jobId: queuedId });
+    }
+
     if (event && event !== 'pull_request') {
       return reply.status(200).send({
         status: 'ignored',
@@ -97,6 +173,71 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const event = request.headers['x-gitlab-event'] as string | undefined;
+
+    if (event === 'Note Hook') {
+      const parsed = gitlabNoteHookSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          statusCode: 400,
+          error: 'Bad Request',
+          message: parsed.error.issues[0]?.message ?? 'Invalid payload',
+        });
+      }
+
+      const payload = parsed.data;
+
+      if (payload.object_attributes.noteable_type !== 'MergeRequest') {
+        return reply.status(200).send({ status: 'ignored', reason: 'Note not on MergeRequest' });
+      }
+
+      if (!REVIEW_COMMAND.test(payload.object_attributes.note)) {
+        return reply.status(200).send({ status: 'ignored', reason: 'No /review command found' });
+      }
+
+      const mr = payload.merge_request;
+      if (!mr) {
+        return reply.status(400).send({
+          statusCode: 400,
+          error: 'Bad Request',
+          message: 'Missing merge_request in Note Hook payload',
+        });
+      }
+
+      if (!isSafeBranchName(mr.source_branch) || !isSafeBranchName(mr.target_branch)) {
+        return reply.status(400).send({
+          statusCode: 400,
+          error: 'Bad Request',
+          message: 'Branch name contains invalid characters.',
+        });
+      }
+
+      const jobId = `gitlab-${randomUUID()}`;
+      const jobData: JobPayload = {
+        jobId,
+        provider: 'gitlab',
+        cloneUrl: mr.target.git_http_url,
+        headRef: mr.source_branch,
+        baseRef: mr.target_branch,
+        headSha: mr.last_commit.id,
+        mrIid: mr.iid,
+        projectId: payload.project.id,
+        baseSha: mr.diff_refs?.base_sha,
+        startSha: mr.diff_refs?.start_sha,
+      };
+
+      const queuedId = await reviewQueue.addJob('gitlab-review', jobData as unknown as Record<string, unknown>);
+
+      logger.info('GitLab MR comment trigger enqueued', undefined, {
+        jobId: queuedId,
+        projectId: payload.project.id,
+        mrIid: mr.iid,
+        source: mr.source_branch,
+        target: mr.target_branch,
+      });
+
+      return reply.status(202).send({ status: 'enqueued', jobId: queuedId });
+    }
+
     if (event && event !== 'Merge Request Hook') {
       return reply.status(200).send({
         status: 'ignored',
