@@ -8,6 +8,7 @@ import { promptService } from './application/services/prompt.service.js';
 import { parserService } from './application/services/parser.service.js';
 import { githubService } from './infrastructure/vcs/github.service.js';
 import { gitlabService } from './infrastructure/vcs/gitlab.service.js';
+import { repoConfigService } from './infrastructure/repo-config/repo-config.service.js';
 import { TelegramNotifier } from './infrastructure/notifications/telegram.notifier.js';
 import { config } from './config/index.js';
 import type { JobPayload } from './domain/interfaces/queue.interface.js';
@@ -27,6 +28,7 @@ const useCase = new ProcessReviewUseCase({
   outputParser: parserService,
   githubClient: githubService,
   gitlabClient: gitlabService,
+  repoConfigLoader: repoConfigService,
   notifier,
 });
 

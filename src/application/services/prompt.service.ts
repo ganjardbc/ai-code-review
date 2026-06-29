@@ -45,9 +45,34 @@ Required output format:
 
 If there are no issues, return: { "comments": [] }`;
 
-function isIgnoredFile(filePath: string): boolean {
+function isIgnoredFile(filePath: string, extraPatterns: RegExp[] = []): boolean {
   const normalized = filePath.replace(/^[ab]\//, '');
-  return IGNORED_FILE_PATTERNS.some((pattern) => pattern.test(normalized));
+  return IGNORED_FILE_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+    extraPatterns.some((pattern) => pattern.test(normalized));
+}
+
+// Converts a simple glob (supporting `*`, `**`, `?`) into an anchored RegExp.
+function globToRegex(glob: string): RegExp {
+  let result = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        result += '.*';
+        i++;
+        if (glob[i + 1] === '/') i++;
+      } else {
+        result += '[^/]*';
+      }
+    } else if (c === '?') {
+      result += '[^/]';
+    } else if ('.+^${}()|[]\\'.includes(c)) {
+      result += '\\' + c;
+    } else {
+      result += c;
+    }
+  }
+  return new RegExp(`^${result}$`);
 }
 
 function trimContext(hunk: string, maxContext = 3): string {
@@ -94,15 +119,21 @@ function splitByFile(diff: string): Array<{ header: string; content: string; pat
   return blocks;
 }
 
+export interface PromptBuildOptions {
+  extraIgnoreGlobs?: string[];
+  promptExtra?: string;
+}
+
 export interface IPromptBuilder {
-  build(diffText: string): string;
+  build(diffText: string, options?: PromptBuildOptions): string;
 }
 
 export class PromptService implements IPromptBuilder {
-  build(diffText: string): string {
+  build(diffText: string, options: PromptBuildOptions = {}): string {
+    const extraPatterns = (options.extraIgnoreGlobs ?? []).map(globToRegex);
     const files = splitByFile(diffText);
 
-    const filtered = files.filter((f) => !isIgnoredFile(f.path));
+    const filtered = files.filter((f) => !isIgnoredFile(f.path, extraPatterns));
 
     const trimmed = filtered.map((f) => ({
       ...f,
@@ -133,7 +164,11 @@ export class PromptService implements IPromptBuilder {
       ? '\n\n[TRUNCATED: diff exceeded 40KB limit. Some files were omitted from this review.]'
       : '';
 
-    return `${SYSTEM_PROMPT}\n\n--- GIT DIFF ---\n${assembled}${notice}`;
+    const extraContext = options.promptExtra
+      ? `\n\nAdditional project context:\n${options.promptExtra.trim()}`
+      : '';
+
+    return `${SYSTEM_PROMPT}${extraContext}\n\n--- GIT DIFF ---\n${assembled}${notice}`;
   }
 }
 

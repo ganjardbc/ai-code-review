@@ -1,6 +1,6 @@
 import '../mocks/env.js';
 import { describe, it, expect } from 'vitest';
-import { deduplicateComments } from '../../src/application/use-cases/process-review.use-case.js';
+import { deduplicateComments, filterBySeverity } from '../../src/application/use-cases/process-review.use-case.js';
 import type { AiReviewComment } from '../../src/domain/interfaces/ai-provider.interface.js';
 import type { ExistingComment } from '../../src/domain/interfaces/vcs-client.interface.js';
 
@@ -86,5 +86,34 @@ describe('deduplicateComments', () => {
       body: `**[CRITICAL]** ${msg} — please sanitize all user inputs.`,
     }];
     expect(deduplicateComments(incoming, existing)).toHaveLength(0);
+  });
+});
+
+describe('filterBySeverity', () => {
+  const comments: AiReviewComment[] = [
+    { filePath: 'a.ts', lineNumber: 1, message: 'info msg', severity: 'INFO' },
+    { filePath: 'b.ts', lineNumber: 2, message: 'warn msg', severity: 'WARNING' },
+    { filePath: 'c.ts', lineNumber: 3, message: 'crit msg', severity: 'CRITICAL' },
+  ];
+
+  it('returns all comments when minSeverity is INFO', () => {
+    expect(filterBySeverity(comments, 'INFO')).toHaveLength(3);
+  });
+
+  it('returns WARNING and CRITICAL when minSeverity is WARNING', () => {
+    const result = filterBySeverity(comments, 'WARNING');
+    expect(result).toHaveLength(2);
+    expect(result.every(c => c.severity !== 'INFO')).toBe(true);
+  });
+
+  it('returns only CRITICAL when minSeverity is CRITICAL', () => {
+    const result = filterBySeverity(comments, 'CRITICAL');
+    expect(result).toHaveLength(1);
+    expect(result[0]?.severity).toBe('CRITICAL');
+  });
+
+  it('returns empty array when no comments meet threshold', () => {
+    const infoOnly = [{ filePath: 'a.ts', lineNumber: 1, message: 'x', severity: 'INFO' as const }];
+    expect(filterBySeverity(infoOnly, 'CRITICAL')).toHaveLength(0);
   });
 });

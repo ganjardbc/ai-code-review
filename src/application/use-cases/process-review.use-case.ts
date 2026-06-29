@@ -5,6 +5,7 @@ import type { IOutputParser } from '../services/parser.service.js';
 import type { IGithubClient, IGitlabClient, ExistingComment } from '../../domain/interfaces/vcs-client.interface.js';
 import type { JobPayload } from '../../domain/interfaces/queue.interface.js';
 import type { INotifier } from '../../domain/interfaces/notifier.interface.js';
+import type { IRepoConfigLoader } from '../../domain/interfaces/repo-config.interface.js';
 import { logger } from '../../infrastructure/logging/logger.js';
 
 export function deduplicateComments(incoming: AiReviewComment[], existing: ExistingComment[]): AiReviewComment[] {
@@ -12,6 +13,13 @@ export function deduplicateComments(incoming: AiReviewComment[], existing: Exist
   return incoming.filter(
     c => !existing.some(e => e.filePath === c.filePath && e.lineNumber === c.lineNumber && e.body.includes(c.message)),
   );
+}
+
+const SEVERITY_RANK: Record<AiReviewComment['severity'], number> = { INFO: 0, WARNING: 1, CRITICAL: 2 };
+
+export function filterBySeverity(comments: AiReviewComment[], minSeverity: AiReviewComment['severity']): AiReviewComment[] {
+  const threshold = SEVERITY_RANK[minSeverity];
+  return comments.filter((c) => SEVERITY_RANK[c.severity] >= threshold);
 }
 
 export interface ProcessReviewDeps {
@@ -22,6 +30,7 @@ export interface ProcessReviewDeps {
   outputParser: IOutputParser;
   githubClient: IGithubClient;
   gitlabClient: IGitlabClient;
+  repoConfigLoader: IRepoConfigLoader;
   notifier?: INotifier;
 }
 
@@ -56,6 +65,7 @@ export class ProcessReviewUseCase {
       promptBuilder,
       githubClient,
       gitlabClient,
+      repoConfigLoader,
       notifier,
     } = this.deps;
 
@@ -77,6 +87,14 @@ export class ProcessReviewUseCase {
       await gitService.checkout(repoPath, job.headSha);
       logger.info('Git clone+checkout done', undefined, { jobId: job.jobId, durationMs: ms(cloneStart) });
 
+      const repoConfig = await repoConfigLoader.load(repoPath);
+      logger.info('Repo config loaded', undefined, {
+        jobId: job.jobId,
+        ignoreFileCount: repoConfig.ignore_files.length,
+        minSeverity: repoConfig.min_severity,
+        hasPromptExtra: !!repoConfig.prompt_extra,
+      });
+
       const diffStart = process.hrtime.bigint();
       const diff = await gitService.generateDiff(repoPath, job.baseRef, job.headRef);
       const diffBytes = Buffer.byteLength(diff, 'utf-8');
@@ -87,19 +105,24 @@ export class ProcessReviewUseCase {
         return;
       }
 
-      const prompt = promptBuilder.build(diff);
+      const prompt = promptBuilder.build(diff, {
+        extraIgnoreGlobs: repoConfig.ignore_files,
+        promptExtra: repoConfig.prompt_extra,
+      });
       const truncated = prompt.includes('[TRUNCATED:');
 
       const aiStart = process.hrtime.bigint();
       const reviewResult = await aiProvider.review(prompt);
+      const severityFiltered = filterBySeverity(reviewResult.comments, repoConfig.min_severity);
       logger.info('AI review done', undefined, {
         jobId: job.jobId,
-        commentCount: reviewResult.comments.length,
+        commentCount: severityFiltered.length,
+        severityDropped: reviewResult.comments.length - severityFiltered.length,
         truncated,
         durationMs: ms(aiStart),
       });
 
-      if (reviewResult.comments.length === 0) {
+      if (severityFiltered.length === 0) {
         logger.info('No comments to post', undefined, { jobId: job.jobId });
         return;
       }
@@ -109,12 +132,12 @@ export class ProcessReviewUseCase {
         ? await githubClient.getExistingReviewComments(job.repoOwner!, job.repoName!, job.prNumber!)
         : await gitlabClient.getExistingMrNotes(job.projectId!, job.mrIid!);
 
-      const newComments = deduplicateComments(reviewResult.comments, existingComments);
-      const skippedCount = reviewResult.comments.length - newComments.length;
+      const newComments = deduplicateComments(severityFiltered, existingComments);
+      const skippedCount = severityFiltered.length - newComments.length;
 
       logger.info('Deduplication complete', undefined, {
         jobId: job.jobId,
-        total: reviewResult.comments.length,
+        total: severityFiltered.length,
         new: newComments.length,
         skipped: skippedCount,
         durationMs: ms(dedupStart),
