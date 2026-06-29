@@ -1,5 +1,5 @@
 import { Octokit } from '@octokit/rest';
-import type { IGithubClient, PostReviewOptions, PullRequestInfo } from '../../domain/interfaces/vcs-client.interface.js';
+import type { IGithubClient, PostReviewOptions, PullRequestInfo, ExistingComment } from '../../domain/interfaces/vcs-client.interface.js';
 import { config } from '../../config/index.js';
 import { logger } from '../logging/logger.js';
 
@@ -60,6 +60,36 @@ export class GithubService implements IGithubClient {
       headSha: data.head.sha,
       cloneUrl: data.base.repo.clone_url,
     };
+  }
+
+  async getExistingReviewComments(owner: string, repo: string, pullNumber: number): Promise<ExistingComment[]> {
+    try {
+      const result: ExistingComment[] = [];
+      let page = 1;
+      while (true) {
+        const { data } = await this.octokit.pulls.listReviewComments({
+          owner,
+          repo,
+          pull_number: pullNumber,
+          per_page: 100,
+          page,
+        });
+        for (const c of data) {
+          result.push({
+            filePath: c.path,
+            lineNumber: c.line ?? c.original_line ?? 0,
+            body: c.body,
+          });
+        }
+        if (data.length < 100) break;
+        page++;
+      }
+      return result;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn('Failed to fetch existing GitHub review comments, skipping deduplication', undefined, { owner, repo, pullNumber, error: msg });
+      return [];
+    }
   }
 }
 

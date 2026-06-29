@@ -1,11 +1,18 @@
 import type { IGitService, IWorkspaceManager } from '../../domain/interfaces/git.interface.js';
-import type { IAiProvider } from '../../domain/interfaces/ai-provider.interface.js';
+import type { IAiProvider, AiReviewComment } from '../../domain/interfaces/ai-provider.interface.js';
 import type { IPromptBuilder } from '../services/prompt.service.js';
 import type { IOutputParser } from '../services/parser.service.js';
-import type { IGithubClient, IGitlabClient } from '../../domain/interfaces/vcs-client.interface.js';
+import type { IGithubClient, IGitlabClient, ExistingComment } from '../../domain/interfaces/vcs-client.interface.js';
 import type { JobPayload } from '../../domain/interfaces/queue.interface.js';
 import type { INotifier } from '../../domain/interfaces/notifier.interface.js';
 import { logger } from '../../infrastructure/logging/logger.js';
+
+export function deduplicateComments(incoming: AiReviewComment[], existing: ExistingComment[]): AiReviewComment[] {
+  if (existing.length === 0) return incoming;
+  return incoming.filter(
+    c => !existing.some(e => e.filePath === c.filePath && e.lineNumber === c.lineNumber && e.body.includes(c.message)),
+  );
+}
 
 export interface ProcessReviewDeps {
   gitService: IGitService;
@@ -97,6 +104,27 @@ export class ProcessReviewUseCase {
         return;
       }
 
+      const dedupStart = process.hrtime.bigint();
+      const existingComments = job.provider === 'github'
+        ? await githubClient.getExistingReviewComments(job.repoOwner!, job.repoName!, job.prNumber!)
+        : await gitlabClient.getExistingMrNotes(job.projectId!, job.mrIid!);
+
+      const newComments = deduplicateComments(reviewResult.comments, existingComments);
+      const skippedCount = reviewResult.comments.length - newComments.length;
+
+      logger.info('Deduplication complete', undefined, {
+        jobId: job.jobId,
+        total: reviewResult.comments.length,
+        new: newComments.length,
+        skipped: skippedCount,
+        durationMs: ms(dedupStart),
+      });
+
+      if (newComments.length === 0) {
+        logger.info('All comments are duplicates — nothing to post', undefined, { jobId: job.jobId });
+        return;
+      }
+
       const vcsStart = process.hrtime.bigint();
 
       if (job.provider === 'github') {
@@ -108,7 +136,7 @@ export class ProcessReviewUseCase {
           repo: job.repoName,
           pullNumber: job.prNumber,
           commitSha: job.headSha,
-          comments: reviewResult.comments,
+          comments: newComments,
         });
       } else if (job.provider === 'gitlab') {
         if (!job.projectId || !job.mrIid) {
@@ -120,14 +148,14 @@ export class ProcessReviewUseCase {
           baseSha: job.baseSha ?? job.headSha,
           startSha: job.startSha ?? job.headSha,
           headSha: job.headSha,
-          comments: reviewResult.comments,
+          comments: newComments,
         });
       }
 
       logger.info('VCS comments posted', undefined, {
         jobId: job.jobId,
         provider: job.provider,
-        commentCount: reviewResult.comments.length,
+        commentCount: newComments.length,
         durationMs: ms(vcsStart),
       });
 
@@ -142,7 +170,7 @@ export class ProcessReviewUseCase {
         provider: job.provider,
         repoLabel: repoLabel(job),
         prNumber: (job.prNumber ?? job.mrIid)!,
-        commentCount: reviewResult.comments.length,
+        commentCount: newComments.length,
         durationMs: totalMs,
         prUrl: buildPrUrl(job),
       });
