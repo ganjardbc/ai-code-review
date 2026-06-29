@@ -4,6 +4,9 @@ const logLevels = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
 const nodeEnvs = ['development', 'production', 'test'] as const;
 const aiRunners = ['direct', 'opencode'] as const;
 
+const boolEnvVar = (defaultVal: 'true' | 'false' = 'true') =>
+  z.enum(['true', 'false', '1', '0']).default(defaultVal).transform(v => v === 'true' || v === '1');
+
 export const configSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   NODE_ENV: z.enum(nodeEnvs).default('development'),
@@ -37,6 +40,9 @@ export const configSchema = z.object({
   GITLAB_ACCESS_TOKEN: z
     .string({ error: 'GITLAB_ACCESS_TOKEN is required' })
     .min(1, 'GITLAB_ACCESS_TOKEN cannot be empty'),
+
+  ENABLE_REVIEW_BY_COMMENT: boolEnvVar(),
+  ENABLE_REVIEW_BY_MR_OPEN: boolEnvVar(),
 
   WORKSPACE_DIR: z.string().default('/tmp/ai-reviewer/workspace'),
 

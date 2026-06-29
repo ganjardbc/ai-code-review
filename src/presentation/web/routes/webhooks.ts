@@ -57,6 +57,10 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(200).send({ status: 'ignored', reason: 'No /review command found' });
       }
 
+      if (!config.ENABLE_REVIEW_BY_COMMENT) {
+        return reply.status(200).send({ status: 'disabled', reason: 'Review by comment is disabled' });
+      }
+
       const owner = payload.repository.owner.login;
       const repo = payload.repository.name;
       const prNumber = payload.issue.number;
@@ -124,6 +128,10 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
 
     if (!GITHUB_PR_ACTIONS.has(payload.action)) {
       return reply.status(200).send({ status: 'ignored', action: payload.action });
+    }
+
+    if (!config.ENABLE_REVIEW_BY_MR_OPEN) {
+      return reply.status(200).send({ status: 'disabled', reason: 'Review by merge request is disabled' });
     }
 
     const headRef = payload.pull_request.head.ref;
@@ -203,6 +211,10 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
+      if (!config.ENABLE_REVIEW_BY_COMMENT) {
+        return reply.status(200).send({ status: 'disabled', reason: 'Review by comment is disabled' });
+      }
+
       if (!isSafeBranchName(mr.source_branch) || !isSafeBranchName(mr.target_branch)) {
         return reply.status(400).send({
           statusCode: 400,
@@ -258,6 +270,10 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
 
     if (!GITLAB_MR_ACTIONS.has(payload.object_attributes.action)) {
       return reply.status(200).send({ status: 'ignored', action: payload.object_attributes.action });
+    }
+
+    if (!config.ENABLE_REVIEW_BY_MR_OPEN) {
+      return reply.status(200).send({ status: 'disabled', reason: 'Review by merge request is disabled' });
     }
 
     const sourceBranch = payload.object_attributes.source_branch;
