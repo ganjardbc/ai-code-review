@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Endpoints
+
+- `POST /webhooks/github` — GitHub webhook receiver
+- `POST /webhooks/gitlab` — GitLab webhook receiver
+- `GET /health` — checks Redis connectivity and disk write access on `WORKSPACE_DIR`; returns 200 `{ status: "healthy" }` or 503 `{ status: "unhealthy", services: { redis, disk } }`
+
 ## Commands
 
 ```bash
@@ -60,6 +66,10 @@ Two independent Node.js processes share a BullMQ queue via Redis:
 - `direct` → `DirectApiRunner` (HTTP to 9Router API, requires `NINE_ROUTER_API_KEY`)
 - `opencode` → `OpenCodeRunner` (spawns `opencode run --format json`, parses NDJSON)
 
+**Config validation** (`config/schema.ts`): all four VCS credentials (`GITHUB_WEBHOOK_SECRET`, `GITHUB_ACCESS_TOKEN`, `GITLAB_WEBHOOK_SECRET`, `GITLAB_ACCESS_TOKEN`) are **always required** by the Zod schema — there is no per-platform optionality. Set dummy values if only using one platform. `NINE_ROUTER_API_KEY` is validated required when `AI_RUNNER=direct` via `superRefine`.
+
+**Worker concurrency**: `WORKER_CONCURRENCY` env var (default: `3`) is read directly from `process.env` in `infrastructure/queue/worker.ts` — it is not part of the Zod config schema.
+
 ### Webhook trigger flows
 
 Two trigger types per platform, both use the same `/webhooks/github` and `/webhooks/gitlab` endpoints:
@@ -79,7 +89,9 @@ The comment trigger for GitHub requires a `getPullRequest()` API call to fetch b
 
 - **Diff limits**: `PromptService` filters lock files / binaries and hard-caps the diff at 40 KB before sending to AI. Files are filtered by pattern; context lines are trimmed to 3.
 
-- **AI response format**: Both runners expect the AI to return JSON `{ "comments": [{ "filePath", "lineNumber", "message", "severity" }] }`. `ParserService` handles markdown-wrapped responses and schema validation.
+- **AI response format**: Both runners expect the AI to return JSON `{ "comments": [{ "filePath", "lineNumber", "message", "severity" }] }`. `ParserService` handles markdown-wrapped responses and schema validation. The `severity` field is passed through to VCS comments as-is; no filtering or prioritization is applied based on it.
+
+- **GitLab `baseSha`/`startSha`**: These are optional on `JobPayload` (sourced from `diff_refs` in the webhook payload). `ProcessReviewUseCase` falls back to `headSha` for both when absent. Missing `diff_refs` produces valid but potentially less precise inline comment anchoring.
 
 ### Test setup
 
