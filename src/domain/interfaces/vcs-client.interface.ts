@@ -29,6 +29,13 @@ export interface IGithubClient {
   getPullRequest(owner: string, repo: string, pullNumber: number): Promise<PullRequestInfo>;
 }
 
+export interface MergeRequestInfo {
+  baseSha: string;
+  startSha: string;
+  headSha: string;
+}
+
 export interface IGitlabClient {
   postReview(options: PostMrReviewOptions): Promise<void>;
+  getMergeRequest(projectId: number, mrIid: number): Promise<MergeRequestInfo>;
 }

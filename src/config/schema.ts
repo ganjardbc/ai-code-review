@@ -40,6 +40,10 @@ export const configSchema = z.object({
   GITLAB_ACCESS_TOKEN: z
     .string({ error: 'GITLAB_ACCESS_TOKEN is required' })
     .min(1, 'GITLAB_ACCESS_TOKEN cannot be empty'),
+  GITLAB_API_URL: z
+    .string()
+    .url('GITLAB_API_URL must be a valid URL')
+    .optional(),
 
   ENABLE_REVIEW_BY_COMMENT: boolEnvVar(),
   ENABLE_REVIEW_BY_MR_OPEN: boolEnvVar(),

@@ -15,11 +15,19 @@ import {
 import { logger } from '../../../infrastructure/logging/logger.js';
 import { reviewQueue } from '../../../infrastructure/queue/client.js';
 import { githubService } from '../../../infrastructure/vcs/github.service.js';
+import { gitlabService } from '../../../infrastructure/vcs/gitlab.service.js';
 import type { JobPayload } from '../../../domain/interfaces/queue.interface.js';
 
 const GITHUB_PR_ACTIONS = new Set(['opened', 'reopened', 'synchronize']);
 const GITLAB_MR_ACTIONS = new Set(['open', 'reopen', 'update']);
 const REVIEW_COMMAND = /^\s*\/review\b/i;
+
+function injectGitlabCredentials(rawUrl: string, token: string): string {
+  const url = new URL(rawUrl);
+  url.username = 'oauth2';
+  url.password = token;
+  return url.toString();
+}
 
 export async function webhookRoutes(app: FastifyInstance): Promise<void> {
   app.post('/github', async (request, reply) => {
@@ -223,18 +231,29 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
+      let diffRefs = mr.diff_refs;
+      if (!diffRefs) {
+        try {
+          const mrInfo = await gitlabService.getMergeRequest(payload.project.id, mr.iid);
+          diffRefs = { base_sha: mrInfo.baseSha, start_sha: mrInfo.startSha, head_sha: mrInfo.headSha };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn('Failed to fetch MR diff_refs, inline comments unavailable', undefined, { projectId: payload.project.id, mrIid: mr.iid, reason: msg });
+        }
+      }
+
       const jobId = `gitlab-${randomUUID()}`;
       const jobData: JobPayload = {
         jobId,
         provider: 'gitlab',
-        cloneUrl: mr.target.git_http_url,
+        cloneUrl: injectGitlabCredentials(mr.target.git_http_url, config.GITLAB_ACCESS_TOKEN),
         headRef: mr.source_branch,
         baseRef: mr.target_branch,
         headSha: mr.last_commit.id,
         mrIid: mr.iid,
         projectId: payload.project.id,
-        baseSha: mr.diff_refs?.base_sha,
-        startSha: mr.diff_refs?.start_sha,
+        baseSha: diffRefs?.base_sha,
+        startSha: diffRefs?.start_sha,
       };
 
       const queuedId = await reviewQueue.addJob('gitlab-review', jobData as unknown as Record<string, unknown>);
@@ -291,7 +310,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     const jobData: JobPayload = {
       jobId,
       provider: 'gitlab',
-      cloneUrl: payload.object_attributes.target.git_http_url,
+      cloneUrl: injectGitlabCredentials(payload.object_attributes.target.git_http_url, config.GITLAB_ACCESS_TOKEN),
       headRef: sourceBranch,
       baseRef: targetBranch,
       headSha: payload.object_attributes.last_commit.id,

@@ -1,5 +1,5 @@
 import { Gitlab } from '@gitbeaker/rest';
-import type { IGitlabClient, PostMrReviewOptions } from '../../domain/interfaces/vcs-client.interface.js';
+import type { IGitlabClient, MergeRequestInfo, PostMrReviewOptions } from '../../domain/interfaces/vcs-client.interface.js';
 import { config } from '../../config/index.js';
 import { logger } from '../logging/logger.js';
 
@@ -7,7 +7,10 @@ export class GitlabService implements IGitlabClient {
   private readonly api: InstanceType<typeof Gitlab>;
 
   constructor() {
-    this.api = new Gitlab({ token: config.GITLAB_ACCESS_TOKEN });
+    this.api = new Gitlab({
+      token: config.GITLAB_ACCESS_TOKEN,
+      host: config.GITLAB_API_URL,
+    });
   }
 
   async postReview(options: PostMrReviewOptions): Promise<void> {
@@ -20,27 +23,38 @@ export class GitlabService implements IGitlabClient {
 
     const failures: string[] = [];
 
+    const hasValidDiffRefs = baseSha !== headSha;
+
     for (const comment of comments) {
+      const body = `**[${comment.severity}]** \`${comment.filePath}:${comment.lineNumber}\` ${comment.message}`;
       try {
-        await this.api.MergeRequestDiscussions.create(
-          projectId,
-          mrIid,
-          `**[${comment.severity}]** ${comment.message}`,
-          {
-            position: {
-              baseSha,
-              startSha,
-              headSha,
-              positionType: 'text' as const,
-              newPath: comment.filePath,
-              newLine: String(comment.lineNumber),
-            },
-          },
-        );
+        if (hasValidDiffRefs) {
+          try {
+            await this.api.MergeRequestDiscussions.create(
+              projectId,
+              mrIid,
+              body,
+              {
+                position: {
+                  baseSha,
+                  startSha,
+                  headSha,
+                  positionType: 'text' as const,
+                  newPath: comment.filePath,
+                  newLine: String(comment.lineNumber),
+                },
+              },
+            );
+          } catch {
+            await this.api.MergeRequestNotes.create(projectId, mrIid, body);
+          }
+        } else {
+          await this.api.MergeRequestNotes.create(projectId, mrIid, body);
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         failures.push(`${comment.filePath}:${comment.lineNumber} — ${msg}`);
-        logger.error('Failed to post GitLab discussion comment', err instanceof Error ? err : new Error(msg), {
+        logger.error('Failed to post GitLab comment', err instanceof Error ? err : new Error(msg), {
           projectId,
           mrIid,
           filePath: comment.filePath,
@@ -56,6 +70,19 @@ export class GitlabService implements IGitlabClient {
       posted,
       failed: failures.length,
     });
+  }
+
+  async getMergeRequest(projectId: number, mrIid: number): Promise<MergeRequestInfo> {
+    const mr = await this.api.MergeRequests.show(projectId, mrIid);
+    const refs = (mr as unknown as { diff_refs?: { base_sha: string; start_sha: string; head_sha: string } }).diff_refs;
+    if (!refs) {
+      throw new Error(`MR ${mrIid} has no diff_refs — cannot anchor inline comments`);
+    }
+    return {
+      baseSha: refs.base_sha,
+      startSha: refs.start_sha,
+      headSha: refs.head_sha,
+    };
   }
 }
 
