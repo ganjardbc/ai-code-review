@@ -1,7 +1,10 @@
 import { Gitlab } from '@gitbeaker/rest';
-import type { IGitlabClient, MergeRequestInfo, PostMrReviewOptions } from '../../domain/interfaces/vcs-client.interface.js';
+import type { IGitlabClient, MergeRequestInfo, PostMrReviewOptions, ExistingComment } from '../../domain/interfaces/vcs-client.interface.js';
 import { config } from '../../config/index.js';
 import { logger } from '../logging/logger.js';
+
+// Matches the body format our bot writes: **[SEVERITY]** `filepath:lineNumber` message
+const BOT_NOTE_RE = /^\*\*\[(?:INFO|WARNING|CRITICAL)\]\*\*\s*`([^:]+):(\d+)`\s+/;
 
 export class GitlabService implements IGitlabClient {
   private readonly api: InstanceType<typeof Gitlab>;
@@ -83,6 +86,29 @@ export class GitlabService implements IGitlabClient {
       startSha: refs.start_sha,
       headSha: refs.head_sha,
     };
+  }
+
+  async getExistingMrNotes(projectId: number, mrIid: number): Promise<ExistingComment[]> {
+    try {
+      const notes = await this.api.MergeRequestNotes.all(projectId, mrIid);
+      const result: ExistingComment[] = [];
+      for (const note of notes as Array<{ body?: string; system?: boolean }>) {
+        if (note.system || !note.body) continue;
+        const match = BOT_NOTE_RE.exec(note.body);
+        if (match) {
+          result.push({
+            filePath: match[1]!,
+            lineNumber: parseInt(match[2]!, 10),
+            body: note.body,
+          });
+        }
+      }
+      return result;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn('Failed to fetch existing GitLab MR notes, skipping deduplication', undefined, { projectId, mrIid, error: msg });
+      return [];
+    }
   }
 }
 

@@ -88,4 +88,33 @@ index 000..111
     const result = ps.build('');
     expect(result).toContain('GIT DIFF');
   });
+
+  it('filters files matching extraIgnoreGlobs', () => {
+    const generatedDiff = `diff --git a/src/__generated__/types.ts b/src/__generated__/types.ts\n+generated code\n`;
+    const result = ps.build(`${generatedDiff}${SIMPLE_DIFF}`, {
+      extraIgnoreGlobs: ['**/__generated__/**'],
+    });
+    expect(result).not.toContain('__generated__');
+    expect(result).toContain('src/auth.ts');
+  });
+
+  it('filters files matching glob with leading wildcard', () => {
+    const migDiff = `diff --git a/db/migrations/0001.sql b/db/migrations/0001.sql\n+create table\n`;
+    const result = ps.build(`${migDiff}${SIMPLE_DIFF}`, {
+      extraIgnoreGlobs: ['db/migrations/*'],
+    });
+    expect(result).not.toContain('migrations');
+    expect(result).toContain('src/auth.ts');
+  });
+
+  it('appends promptExtra to the system prompt', () => {
+    const result = ps.build(SIMPLE_DIFF, { promptExtra: 'This project uses hexagonal architecture.' });
+    expect(result).toContain('Additional project context:');
+    expect(result).toContain('This project uses hexagonal architecture.');
+  });
+
+  it('does not include extra context section when promptExtra is absent', () => {
+    const result = ps.build(SIMPLE_DIFF);
+    expect(result).not.toContain('Additional project context:');
+  });
 });

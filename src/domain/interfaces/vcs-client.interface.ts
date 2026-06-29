@@ -24,9 +24,16 @@ export interface PullRequestInfo {
   cloneUrl: string;
 }
 
+export interface ExistingComment {
+  filePath: string;
+  lineNumber: number;
+  body: string;
+}
+
 export interface IGithubClient {
   postReview(options: PostReviewOptions): Promise<void>;
   getPullRequest(owner: string, repo: string, pullNumber: number): Promise<PullRequestInfo>;
+  getExistingReviewComments(owner: string, repo: string, pullNumber: number): Promise<ExistingComment[]>;
 }
 
 export interface MergeRequestInfo {
@@ -38,4 +45,5 @@ export interface MergeRequestInfo {
 export interface IGitlabClient {
   postReview(options: PostMrReviewOptions): Promise<void>;
   getMergeRequest(projectId: number, mrIid: number): Promise<MergeRequestInfo>;
+  getExistingMrNotes(projectId: number, mrIid: number): Promise<ExistingComment[]>;
 }
