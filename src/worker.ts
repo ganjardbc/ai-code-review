@@ -8,9 +8,16 @@ import { promptService } from './application/services/prompt.service.js';
 import { parserService } from './application/services/parser.service.js';
 import { githubService } from './infrastructure/vcs/github.service.js';
 import { gitlabService } from './infrastructure/vcs/gitlab.service.js';
+import { TelegramNotifier } from './infrastructure/notifications/telegram.notifier.js';
+import { config } from './config/index.js';
 import type { JobPayload } from './domain/interfaces/queue.interface.js';
 
 const aiProvider = createRunner(parserService);
+
+const notifier =
+  config.TELEGRAM_BOT_TOKEN && config.TELEGRAM_CHAT_ID
+    ? new TelegramNotifier(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID)
+    : undefined;
 
 const useCase = new ProcessReviewUseCase({
   gitService: new GitService(),
@@ -20,6 +27,7 @@ const useCase = new ProcessReviewUseCase({
   outputParser: parserService,
   githubClient: githubService,
   gitlabClient: gitlabService,
+  notifier,
 });
 
 const worker = new QueueWorker(async (job) => {

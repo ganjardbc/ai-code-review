@@ -4,6 +4,7 @@ import type { IPromptBuilder } from '../services/prompt.service.js';
 import type { IOutputParser } from '../services/parser.service.js';
 import type { IGithubClient, IGitlabClient } from '../../domain/interfaces/vcs-client.interface.js';
 import type { JobPayload } from '../../domain/interfaces/queue.interface.js';
+import type { INotifier } from '../../domain/interfaces/notifier.interface.js';
 import { logger } from '../../infrastructure/logging/logger.js';
 
 export interface ProcessReviewDeps {
@@ -14,10 +15,27 @@ export interface ProcessReviewDeps {
   outputParser: IOutputParser;
   githubClient: IGithubClient;
   gitlabClient: IGitlabClient;
+  notifier?: INotifier;
 }
 
 function ms(start: bigint): number {
   return Math.round(Number(process.hrtime.bigint() - start) / 1e6);
+}
+
+function buildPrUrl(job: JobPayload): string | undefined {
+  if (job.provider === 'github' && job.repoOwner && job.repoName && job.prNumber) {
+    return `https://github.com/${job.repoOwner}/${job.repoName}/pull/${job.prNumber}`;
+  }
+  if (job.provider === 'gitlab' && job.mrIid) {
+    const base = job.cloneUrl.replace(/\.git$/, '');
+    return `${base}/-/merge_requests/${job.mrIid}`;
+  }
+  return undefined;
+}
+
+function repoLabel(job: JobPayload): string {
+  if (job.repoOwner && job.repoName) return `${job.repoOwner}/${job.repoName}`;
+  return job.repoName ?? String(job.projectId ?? 'unknown');
 }
 
 export class ProcessReviewUseCase {
@@ -31,6 +49,7 @@ export class ProcessReviewUseCase {
       promptBuilder,
       githubClient,
       gitlabClient,
+      notifier,
     } = this.deps;
 
     const jobStart = process.hrtime.bigint();
@@ -112,14 +131,33 @@ export class ProcessReviewUseCase {
         durationMs: ms(vcsStart),
       });
 
+      const totalMs = ms(jobStart);
       logger.info('Review job completed', undefined, {
         jobId: job.jobId,
-        totalDurationMs: ms(jobStart),
+        totalDurationMs: totalMs,
+      });
+
+      await notifier?.notifyReviewComplete({
+        jobId: job.jobId,
+        provider: job.provider,
+        repoLabel: repoLabel(job),
+        prNumber: (job.prNumber ?? job.mrIid)!,
+        commentCount: reviewResult.comments.length,
+        durationMs: totalMs,
+        prUrl: buildPrUrl(job),
       });
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
       logger.error('Review job failed', err instanceof Error ? err : new Error(String(err)), {
         jobId: job.jobId,
         totalDurationMs: ms(jobStart),
+      });
+      await notifier?.notifyReviewFailed({
+        jobId: job.jobId,
+        provider: job.provider,
+        repoLabel: repoLabel(job),
+        prNumber: (job.prNumber ?? job.mrIid) ?? 0,
+        errorMessage,
       });
       throw err;
     } finally {

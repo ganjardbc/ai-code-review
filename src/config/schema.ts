@@ -52,12 +52,25 @@ export const configSchema = z.object({
 
   QUEUE_JOB_TTL_SECONDS: z.coerce.number().int().positive().default(86400),
   QUEUE_MAX_JOBS_RETAINED: z.coerce.number().int().positive().default(100),
+
+  TELEGRAM_BOT_TOKEN: z.string().min(1).optional(),
+  TELEGRAM_CHAT_ID: z.string().min(1).optional(),
 }).superRefine((data, ctx) => {
   if (data.AI_RUNNER === 'direct' && !data.NINE_ROUTER_API_KEY) {
     ctx.addIssue({
       code: 'custom' as const,
       path: ['NINE_ROUTER_API_KEY'],
       message: 'NINE_ROUTER_API_KEY is required when AI_RUNNER=direct',
+    });
+  }
+  const hasToken = !!data.TELEGRAM_BOT_TOKEN;
+  const hasChatId = !!data.TELEGRAM_CHAT_ID;
+  if (hasToken !== hasChatId) {
+    const missing = hasToken ? 'TELEGRAM_CHAT_ID' : 'TELEGRAM_BOT_TOKEN';
+    ctx.addIssue({
+      code: 'custom' as const,
+      path: [missing],
+      message: `${missing} is required when the other TELEGRAM_* variable is set`,
     });
   }
 });
