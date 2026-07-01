@@ -44,23 +44,41 @@ export class NineRouterService implements IAiProvider {
   }
 
   async review(prompt: string): Promise<ReviewResult> {
+    const delimiter = '\n\n--- GIT DIFF ---\n';
+    const messages: ChatMessage[] = [];
+    const delimiterIdx = prompt.indexOf(delimiter);
+
+    if (delimiterIdx !== -1) {
+      const systemContent = prompt.substring(0, delimiterIdx).trim();
+      const userContent = prompt.substring(delimiterIdx + delimiter.length).trim();
+      messages.push(
+        { role: 'system', content: systemContent },
+        { role: 'user', content: `--- GIT DIFF ---\n${userContent}` }
+      );
+    } else {
+      messages.push({ role: 'user', content: prompt });
+    }
+
     const payload: ChatRequest = {
       model: config.NINE_ROUTER_MODEL,
-      messages: [
-        { role: 'user', content: prompt },
-      ],
+      messages,
       temperature: 0.1,
       response_format: { type: 'json_object' },
-      max_tokens: 4096,
+      max_tokens: 8192,
     };
 
     logger.info('Sending review request to 9Router');
 
     try {
       const response = await this.client.post<ChatResponse>('/chat/completions', payload);
-      const raw = response.data.choices[0]?.message.content ?? '';
+      const choice = response.data.choices[0];
+      const raw = choice?.message.content ?? '';
 
-      logger.debug('Received AI response', undefined, { length: raw.length });
+      logger.debug('Received AI response', undefined, { length: raw.length, finishReason: choice?.finish_reason });
+
+      if (choice?.finish_reason === 'length') {
+        logger.warn('AI response truncated by max_tokens before completion', undefined, { length: raw.length });
+      }
 
       return this.parser.parse(raw);
     } catch (err) {

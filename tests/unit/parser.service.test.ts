@@ -106,4 +106,45 @@ describe('ParserService.parse', () => {
     expect(result.comments[0]?.filePath).toBe('src/auth.ts');
     expect(result.comments[1]?.filePath).toBe('src/db.ts');
   });
+
+  describe('JSON repair fallback', () => {
+    it('repairs JSON with unescaped double quotes inside values', () => {
+      const raw = '{"comments": [{"filePath": "src/app.ts", "lineNumber": 10, "message": "Avoid "var" declarations and use "const"", "severity": "WARNING"}]}';
+      const result = parser.parse(raw);
+      expect(result.comments).toHaveLength(1);
+      expect(result.comments[0]?.message).toBe('Avoid "var" declarations and use "const"');
+    });
+
+    it('repairs JSON with literal newlines inside string values', () => {
+      const raw = '{"comments": [\n  {\n    "filePath": "src/app.ts",\n    "lineNumber": 10,\n    "message": "Line 1\nLine 2",\n    "severity": "WARNING"\n  }\n]}';
+      const result = parser.parse(raw);
+      expect(result.comments).toHaveLength(1);
+      expect(result.comments[0]?.message).toBe('Line 1\nLine 2');
+    });
+
+    it('repairs JSON with trailing commas', () => {
+      const raw = '{"comments": [{"filePath": "src/app.ts", "lineNumber": 10, "message": "test", "severity": "WARNING",},],}';
+      const result = parser.parse(raw);
+      expect(result.comments).toHaveLength(1);
+      expect(result.comments[0]?.message).toBe('test');
+    });
+
+    it('repairs truncated JSON by balancing braces/brackets', () => {
+      const raw = '{"comments": [{"filePath": "src/app.ts", "lineNumber": 10, "message": "test", "severity": "WARNING"';
+      const result = parser.parse(raw);
+      expect(result.comments).toHaveLength(1);
+      expect(result.comments[0]?.message).toBe('test');
+    });
+
+    it('repairs the specific user reported error case', () => {
+      // Simulate the exact kind of raw output we had in the error report
+      const raw = '{"comments": [{"filePath": "src/components/VideoForm.vue", "lineNumber": 42, "message": "[488px] !rounded-lg !overflow-hidden mt-4"\n+          />\n+        </ClientOnly>\n         :error-message="formErrors.thumbnail"\n       >\nWait, where did `</UiFormGroup>` and `<UiFormGroup label="Video ", "severity": "CRITICAL"}]}';
+      const result = parser.parse(raw);
+      expect(result.comments).toHaveLength(1);
+      expect(result.comments[0]?.filePath).toBe('src/components/VideoForm.vue');
+      expect(result.comments[0]?.lineNumber).toBe(42);
+      expect(result.comments[0]?.severity).toBe('CRITICAL');
+      expect(result.comments[0]?.message).toContain('Wait, where did `</UiFormGroup>` and `<UiFormGroup label="Video ');
+    });
+  });
 });

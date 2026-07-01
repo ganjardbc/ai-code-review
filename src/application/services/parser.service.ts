@@ -40,12 +40,122 @@ function stripMarkdown(text: string): string {
 }
 
 function extractJson(text: string): string {
-  const start = text.indexOf('{');
+  // Anchor on the "comments" key so stray braces in leaked reasoning/code
+  // (e.g. "initialValues: {") before the real JSON don't get picked as the start.
+  const commentsIdx = text.indexOf('"comments"');
+  const searchFrom = commentsIdx !== -1 ? commentsIdx : text.length;
+  const start = text.lastIndexOf('{', searchFrom);
   const end = text.lastIndexOf('}');
   if (start !== -1 && end !== -1 && end > start) {
     return text.slice(start, end + 1);
   }
   return text;
+}
+
+function repairJson(str: string): string {
+  // 1. Remove trailing commas before closing braces/brackets
+  const cleaned = str.replace(/,\s*\]/g, ']').replace(/,\s*\}/g, '}');
+
+  // 2. Trace and escape unescaped control chars (like newlines) and unescaped quotes inside strings
+  let result = '';
+  let inString = false;
+  let escape = false;
+  let currentString = '';
+
+  for (let i = 0; i < cleaned.length; i++) {
+    const char = cleaned[i];
+
+    if (inString) {
+      if (escape) {
+        currentString += char;
+        escape = false;
+      } else if (char === '\\') {
+        currentString += char;
+        escape = true;
+      } else if (char === '"') {
+        // Check if this is the closing quote of a JSON key or value
+        let nextNonWs = '';
+        for (let j = i + 1; j < cleaned.length; j++) {
+          if (!/\s/.test(cleaned[j]!)) {
+            nextNonWs = cleaned[j]!;
+            break;
+          }
+        }
+
+        const isClosing = nextNonWs === '' || nextNonWs === ':' || nextNonWs === ',' || nextNonWs === '}' || nextNonWs === ']';
+
+        if (isClosing) {
+          result += '"' + currentString + '"';
+          inString = false;
+          currentString = '';
+        } else {
+          // Unescaped quote inside a string block
+          currentString += '\\"';
+        }
+      } else if (char === '\n' || char === '\r') {
+        // Escape literal newlines
+        currentString += '\\n';
+      } else {
+        currentString += char;
+      }
+    } else {
+      if (char === '"') {
+        inString = true;
+        currentString = '';
+      } else {
+        result += char;
+      }
+    }
+  }
+
+  if (inString) {
+    result += '"' + currentString + '"';
+  }
+
+  // 3. Balance braces and brackets for truncated responses
+  const stack: string[] = [];
+  let inStringBlock = false;
+  let esc = false;
+
+  for (let i = 0; i < result.length; i++) {
+    const c = result[i];
+    if (inStringBlock) {
+      if (esc) {
+        esc = false;
+      } else if (c === '\\') {
+        esc = true;
+      } else if (c === '"') {
+        inStringBlock = false;
+      }
+    } else {
+      if (c === '"') {
+        inStringBlock = true;
+      } else if (c === '{') {
+        stack.push('}');
+      } else if (c === '}') {
+        const lastIdx = stack.lastIndexOf('}');
+        if (lastIdx !== -1) {
+          stack.splice(lastIdx, 1);
+        }
+      } else if (c === '[') {
+        stack.push(']');
+      } else if (c === ']') {
+        const lastIdx = stack.lastIndexOf(']');
+        if (lastIdx !== -1) {
+          stack.splice(lastIdx, 1);
+        }
+      }
+    }
+  }
+
+  if (inStringBlock) {
+    result += '"';
+  }
+  while (stack.length > 0) {
+    result += stack.pop();
+  }
+
+  return result;
 }
 
 function parseRaw(raw: string): unknown {
@@ -54,12 +164,24 @@ function parseRaw(raw: string): unknown {
   try {
     return JSON.parse(cleaned);
   } catch {
-    // fallback: extract JSON boundaries
-    const extracted = extractJson(cleaned);
+    // try to repair the cleaned string first
     try {
-      return JSON.parse(extracted);
+      const repaired = repairJson(cleaned);
+      return JSON.parse(repaired);
     } catch {
-      throw new Error(`Unable to parse AI response as JSON: ${cleaned.slice(0, 200)}`);
+      // fallback: extract JSON boundaries
+      const extracted = extractJson(cleaned);
+      try {
+        return JSON.parse(extracted);
+      } catch {
+        // try to repair the extracted boundaries as a last resort
+        try {
+          const repairedExtracted = repairJson(extracted);
+          return JSON.parse(repairedExtracted);
+        } catch {
+          throw new Error(`Unable to parse AI response as JSON: ${cleaned.slice(0, 200)}`);
+        }
+      }
     }
   }
 }
