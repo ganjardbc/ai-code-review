@@ -38,6 +38,7 @@ const fixUseCase = new ProcessFixUseCase({
   fixPromptBuilder: promptService,
   githubClient: githubService,
   gitlabClient: gitlabService,
+  notifier,
 });
 
 const worker = new QueueWorker(async (job) => {

@@ -5,8 +5,10 @@ import type { IAiProvider } from '../../domain/interfaces/ai-provider.interface.
 import type { IFixPromptBuilder, FixFileInput } from '../services/prompt.service.js';
 import type { IGithubClient, IGitlabClient, OutstandingComment } from '../../domain/interfaces/vcs-client.interface.js';
 import type { JobPayload } from '../../domain/interfaces/queue.interface.js';
+import type { INotifier } from '../../domain/interfaces/notifier.interface.js';
 import { config } from '../../config/index.js';
 import { logger } from '../../infrastructure/logging/logger.js';
+import { buildPrUrl, repoLabel } from './job-info.util.js';
 
 export interface ProcessFixDeps {
   gitService: IGitService;
@@ -15,6 +17,7 @@ export interface ProcessFixDeps {
   fixPromptBuilder: IFixPromptBuilder;
   githubClient: IGithubClient;
   gitlabClient: IGitlabClient;
+  notifier?: INotifier;
 }
 
 function ms(start: bigint): number {
@@ -38,7 +41,7 @@ export class ProcessFixUseCase {
   constructor(private readonly deps: ProcessFixDeps) {}
 
   async execute(job: JobPayload): Promise<void> {
-    const { gitService, workspaceManager, aiProvider, fixPromptBuilder, githubClient, gitlabClient } = this.deps;
+    const { gitService, workspaceManager, aiProvider, fixPromptBuilder, githubClient, gitlabClient, notifier } = this.deps;
 
     const jobStart = process.hrtime.bigint();
     const workspacePath = await workspaceManager.createWorkspace();
@@ -114,11 +117,30 @@ export class ProcessFixUseCase {
 
       await this.postSummary(job, applied, githubClient, gitlabClient);
 
-      logger.info('Fix job completed', undefined, { jobId: job.jobId, totalDurationMs: ms(jobStart) });
+      const totalMs = ms(jobStart);
+      logger.info('Fix job completed', undefined, { jobId: job.jobId, totalDurationMs: totalMs });
+
+      await notifier?.notifyFixComplete({
+        jobId: job.jobId,
+        provider: job.provider,
+        repoLabel: repoLabel(job),
+        prNumber: (job.prNumber ?? job.mrIid)!,
+        filesFixed: applied,
+        durationMs: totalMs,
+        prUrl: buildPrUrl(job),
+      });
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
       logger.error('Fix job failed', err instanceof Error ? err : new Error(String(err)), {
         jobId: job.jobId,
         totalDurationMs: ms(jobStart),
+      });
+      await notifier?.notifyFixFailed({
+        jobId: job.jobId,
+        provider: job.provider,
+        repoLabel: repoLabel(job),
+        prNumber: (job.prNumber ?? job.mrIid) ?? 0,
+        errorMessage,
       });
       throw err;
     } finally {

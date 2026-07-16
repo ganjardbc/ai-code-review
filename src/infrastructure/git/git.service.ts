@@ -21,6 +21,10 @@ function assertInsideWorkspace(dirPath: string): void {
   }
 }
 
+function isNonFastForwardError(err: unknown): boolean {
+  return err instanceof GitError && /non-fast-forward|fetch first|rejected/i.test(err.message);
+}
+
 function runGit(args: string[], cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn('git', args, {
@@ -136,6 +140,29 @@ export class GitService implements IGitService {
   async push(targetDir: string, remoteUrl: string, branch: string): Promise<void> {
     assertInsideWorkspace(targetDir);
 
+    try {
+      await this.attemptPush(targetDir, remoteUrl, branch);
+    } catch (err) {
+      if (!isNonFastForwardError(err)) {
+        throw err;
+      }
+
+      logger.warn('Push rejected — branch moved since clone, rebasing onto latest remote commit', undefined, { branch });
+      await runGit(['fetch', '--', remoteUrl, branch], targetDir);
+
+      try {
+        await runGit(['rebase', 'FETCH_HEAD'], targetDir);
+      } catch (rebaseErr) {
+        await runGit(['rebase', '--abort'], targetDir).catch(() => undefined);
+        const msg = rebaseErr instanceof Error ? rebaseErr.message : String(rebaseErr);
+        throw new GitError(`Push rejected and rebase onto latest ${branch} failed, likely a real conflict: ${msg}`);
+      }
+
+      await this.attemptPush(targetDir, remoteUrl, branch);
+    }
+  }
+
+  private async attemptPush(targetDir: string, remoteUrl: string, branch: string): Promise<void> {
     logger.info('Pushing fix commit', undefined, { branch });
     await runGit(['push', '--', remoteUrl, `HEAD:refs/heads/${branch}`], targetDir);
   }

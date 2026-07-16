@@ -70,4 +70,36 @@ describe('GitService.commitAll / push', () => {
     await expect(gitService.commitAll('/tmp/outside-workspace', 'msg')).rejects.toThrow();
     await expect(gitService.push('/tmp/outside-workspace', originPath, 'main')).rejects.toThrow();
   });
+
+  it('rebases and retries when the remote branch has moved with a non-conflicting change', async () => {
+    const otherDir = `${targetDir}-other`;
+    await gitService.clone(originPath, 'main', otherDir);
+    writeFileSync(join(otherDir, 'other.txt'), 'other change\n');
+    await gitService.commitAll(otherDir, 'other: unrelated change');
+    await gitService.push(otherDir, originPath, 'main');
+    rmSync(otherDir, { recursive: true, force: true });
+
+    writeFileSync(join(targetDir, 'file.txt'), 'my change\n');
+    await gitService.commitAll(targetDir, 'fix: my change');
+
+    await gitService.push(targetDir, originPath, 'main');
+
+    const log = execFileSync('git', ['log', '--oneline', 'main'], { cwd: originPath }).toString();
+    expect(log).toContain('fix: my change');
+    expect(log).toContain('other: unrelated change');
+  });
+
+  it('throws a clear error when the rebase hits a real conflict', async () => {
+    const otherDir = `${targetDir}-conflict`;
+    await gitService.clone(originPath, 'main', otherDir);
+    writeFileSync(join(otherDir, 'file.txt'), 'conflicting remote change\n');
+    await gitService.commitAll(otherDir, 'other: conflicting change');
+    await gitService.push(otherDir, originPath, 'main');
+    rmSync(otherDir, { recursive: true, force: true });
+
+    writeFileSync(join(targetDir, 'file.txt'), 'conflicting local change\n');
+    await gitService.commitAll(targetDir, 'fix: conflicting change');
+
+    await expect(gitService.push(targetDir, originPath, 'main')).rejects.toThrow(/conflict/i);
+  });
 });

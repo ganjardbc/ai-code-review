@@ -10,6 +10,42 @@ import { config } from '../../config/index.js';
 import { logger } from '../logging/logger.js';
 import { withBotMarker, hasBotMarker } from './bot-marker.js';
 
+const REVIEW_THREADS_QUERY = `
+  query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 50, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            isResolved
+            comments(first: 10) {
+              nodes { body path line originalLine }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+interface ReviewThreadComment {
+  body: string;
+  path: string;
+  line: number | null;
+  originalLine: number | null;
+}
+
+interface ReviewThreadsResponse {
+  repository: {
+    pullRequest: {
+      reviewThreads: {
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        nodes: Array<{ isResolved: boolean; comments: { nodes: ReviewThreadComment[] } }>;
+      };
+    };
+  };
+}
+
 export class GithubService implements IGithubClient {
   private readonly octokit: Octokit;
 
@@ -70,20 +106,36 @@ export class GithubService implements IGithubClient {
   }
 
   async listOutstandingBotComments(owner: string, repo: string, pullNumber: number): Promise<OutstandingComment[]> {
-    const { data } = await this.octokit.pulls.listReviewComments({
-      owner,
-      repo,
-      pull_number: pullNumber,
-      per_page: 100,
-    });
+    const outstanding: OutstandingComment[] = [];
+    let cursor: string | null = null;
 
-    return data
-      .filter((c) => hasBotMarker(c.body) && c.path && c.line != null)
-      .map((c) => ({
-        filePath: c.path,
-        lineNumber: c.line as number,
-        message: c.body,
-      }));
+    do {
+      const response: ReviewThreadsResponse = await this.octokit.graphql(REVIEW_THREADS_QUERY, {
+        owner,
+        repo,
+        number: pullNumber,
+        cursor,
+      });
+
+      const threads = response.repository.pullRequest.reviewThreads;
+
+      for (const thread of threads.nodes) {
+        if (thread.isResolved) continue;
+
+        for (const comment of thread.comments.nodes) {
+          if (!hasBotMarker(comment.body)) continue;
+
+          const line = comment.line ?? comment.originalLine;
+          if (!comment.path || line == null) continue;
+
+          outstanding.push({ filePath: comment.path, lineNumber: line, message: comment.body });
+        }
+      }
+
+      cursor = threads.pageInfo.hasNextPage ? threads.pageInfo.endCursor : null;
+    } while (cursor);
+
+    return outstanding;
   }
 
   async postIssueComment(options: PostFixReplyOptions): Promise<void> {

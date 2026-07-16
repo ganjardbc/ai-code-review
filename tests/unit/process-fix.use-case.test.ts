@@ -104,6 +104,12 @@ describe('ProcessFixUseCase', () => {
           fixes: [{ filePath: 'src/auth.ts', content: 'export function login() { validate(); }\n' }],
         }),
       },
+      notifier: {
+        notifyReviewComplete: vi.fn(),
+        notifyReviewFailed: vi.fn(),
+        notifyFixComplete: vi.fn().mockResolvedValue(undefined),
+        notifyFixFailed: vi.fn().mockResolvedValue(undefined),
+      },
     });
 
     const useCase = new ProcessFixUseCase(deps);
@@ -116,8 +122,45 @@ describe('ProcessFixUseCase', () => {
     expect(deps.githubClient.postIssueComment).toHaveBeenCalledWith(
       expect.objectContaining({ owner: 'myorg', repo: 'myrepo', pullNumber: 42 }),
     );
+    expect(deps.notifier?.notifyFixComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ filesFixed: 1, provider: 'github', prNumber: 42 }),
+    );
 
     rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  it('notifies fix failure when the git/AI pipeline throws', async () => {
+    const deps = makeDeps({
+      githubClient: {
+        postReview: vi.fn(),
+        getPullRequest: vi.fn(),
+        listOutstandingBotComments: vi.fn().mockResolvedValue([
+          { filePath: 'src/auth.ts', lineNumber: 1, message: 'Missing validation' },
+        ]),
+        postIssueComment: vi.fn().mockResolvedValue(undefined),
+      },
+      gitService: {
+        clone: vi.fn().mockRejectedValue(new Error('clone failed')),
+        checkout: vi.fn(),
+        generateDiff: vi.fn(),
+        commitAll: vi.fn(),
+        push: vi.fn(),
+      },
+      notifier: {
+        notifyReviewComplete: vi.fn(),
+        notifyReviewFailed: vi.fn(),
+        notifyFixComplete: vi.fn().mockResolvedValue(undefined),
+        notifyFixFailed: vi.fn().mockResolvedValue(undefined),
+      },
+    });
+
+    const useCase = new ProcessFixUseCase(deps);
+    await expect(useCase.execute(BASE_JOB)).rejects.toThrow('clone failed');
+
+    expect(deps.notifier?.notifyFixFailed).toHaveBeenCalledWith(
+      expect.objectContaining({ errorMessage: 'clone failed', prNumber: 42 }),
+    );
+    expect(deps.notifier?.notifyFixComplete).not.toHaveBeenCalled();
   });
 
   it('ignores AI fixes for files outside the requested scope', async () => {

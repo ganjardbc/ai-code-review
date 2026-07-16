@@ -1,4 +1,10 @@
-import type { INotifier, ReviewNotification, ReviewFailureNotification } from '../../domain/interfaces/notifier.interface.js';
+import type {
+  INotifier,
+  ReviewNotification,
+  ReviewFailureNotification,
+  FixNotification,
+  FixFailureNotification,
+} from '../../domain/interfaces/notifier.interface.js';
 import { logger } from '../logging/logger.js';
 
 function esc(text: string): string {
@@ -33,6 +39,31 @@ export class TelegramNotifier implements INotifier {
     const prRef = esc(`${info.repoLabel} #${info.prNumber}`);
     const lines = [
       `❌ <b>Code Review Failed</b>`,
+      ``,
+      `📁 ${prRef}`,
+      `⚠️ ${esc(info.errorMessage)}`,
+    ];
+    await this.send(lines.join('\n'));
+  }
+
+  async notifyFixComplete(info: FixNotification): Promise<void> {
+    const prRef = esc(`${info.repoLabel} #${info.prNumber}`);
+    const duration = (info.durationMs / 1000).toFixed(1);
+    const lines = [
+      `✅ <b>AI Fix Applied</b>`,
+      ``,
+      `📁 ${prRef}`,
+      `🛠 ${info.filesFixed} file${info.filesFixed !== 1 ? 's' : ''} fixed and pushed`,
+      `⏱ ${duration}s`,
+    ];
+    if (info.prUrl) lines.push(``, `🔗 ${esc(info.prUrl)}`);
+    await this.send(lines.join('\n'));
+  }
+
+  async notifyFixFailed(info: FixFailureNotification): Promise<void> {
+    const prRef = esc(`${info.repoLabel} #${info.prNumber}`);
+    const lines = [
+      `❌ <b>AI Fix Failed</b>`,
       ``,
       `📁 ${prRef}`,
       `⚠️ ${esc(info.errorMessage)}`,

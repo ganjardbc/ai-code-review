@@ -6,6 +6,7 @@ import type { IGithubClient, IGitlabClient } from '../../domain/interfaces/vcs-c
 import type { JobPayload } from '../../domain/interfaces/queue.interface.js';
 import type { INotifier } from '../../domain/interfaces/notifier.interface.js';
 import { logger } from '../../infrastructure/logging/logger.js';
+import { buildPrUrl, repoLabel } from './job-info.util.js';
 
 export interface ProcessReviewDeps {
   gitService: IGitService;
@@ -20,22 +21,6 @@ export interface ProcessReviewDeps {
 
 function ms(start: bigint): number {
   return Math.round(Number(process.hrtime.bigint() - start) / 1e6);
-}
-
-function buildPrUrl(job: JobPayload): string | undefined {
-  if (job.provider === 'github' && job.repoOwner && job.repoName && job.prNumber) {
-    return `https://github.com/${job.repoOwner}/${job.repoName}/pull/${job.prNumber}`;
-  }
-  if (job.provider === 'gitlab' && job.mrIid) {
-    const base = job.cloneUrl.replace(/\.git$/, '');
-    return `${base}/-/merge_requests/${job.mrIid}`;
-  }
-  return undefined;
-}
-
-function repoLabel(job: JobPayload): string {
-  if (job.repoOwner && job.repoName) return `${job.repoOwner}/${job.repoName}`;
-  return job.repoName ?? String(job.projectId ?? 'unknown');
 }
 
 export class ProcessReviewUseCase {

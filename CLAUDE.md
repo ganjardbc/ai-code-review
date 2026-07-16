@@ -81,6 +81,10 @@ The comment trigger for GitHub requires a `getPullRequest()` API call to fetch b
 
 **`/fix` flow** (gated by `ENABLE_FIX_BY_COMMENT`, default `false`): `ProcessFixUseCase` fetches outstanding AI-authored review comments via `IGithubClient.listOutstandingBotComments`/`IGitlabClient.listOutstandingBotComments` (comments are tagged with a hidden marker, `infrastructure/vcs/bot-marker.ts`, when posted by `postReview`), clones the PR/MR branch, reads the current content of each affected file, asks the AI provider for full corrected file content (`IAiProvider.fix`, `PromptService.buildFix`), writes the results back, commits, and pushes directly to the PR/MR's head branch — then posts a summary comment. AI-returned fixes for files outside the original outstanding-comment set are dropped as a safety guard.
 
+- GitHub's `listOutstandingBotComments` uses the GraphQL `reviewThreads` API (not REST `pulls.listReviewComments`) so it can filter out threads already marked `isResolved` — otherwise `/fix` would keep re-fixing comments a human already resolved. GitLab's discussion notes carry a `resolved` field natively via REST.
+- `GitService.push` retries once on a non-fast-forward rejection (branch moved since clone): it fetches the remote branch and rebases the local fix commit onto it before retrying. A genuine rebase conflict aborts the rebase and raises a clear `GitError` instead of leaving the workspace mid-rebase.
+- Both use cases notify via the optional `INotifier` (`notifyReviewComplete/Failed`, `notifyFixComplete/Failed`) — currently implemented by `TelegramNotifier`. `job-info.util.ts` holds the shared `buildPrUrl`/`repoLabel` helpers (the GitLab URL variant strips embedded Basic Auth credentials from `cloneUrl` before building the notification link).
+
 ### Critical implementation details
 
 - **`rawBody` buffering**: `app.ts` registers a custom JSON content-type parser that stores the raw `Buffer` on `request.rawBody` before parsing. This is required for HMAC signature verification in `verifyGithubSignature`. Do not replace Fastify's body parsing without preserving this.
