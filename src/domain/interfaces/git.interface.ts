@@ -2,6 +2,8 @@ export interface IGitService {
   clone(repoUrl: string, branch: string, targetDir: string): Promise<void>;
   checkout(targetDir: string, commitSha: string): Promise<void>;
   generateDiff(targetDir: string, baseBranch: string, headBranch: string): Promise<string>;
+  commitAll(targetDir: string, message: string): Promise<boolean>;
+  push(targetDir: string, remoteUrl: string, branch: string): Promise<void>;
 }
 
 export interface IWorkspaceManager {

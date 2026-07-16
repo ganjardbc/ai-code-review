@@ -21,6 +21,28 @@ vi.mock('../../src/infrastructure/queue/connection.js', () => ({
   closeRedisConnection: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Mock VCS clients so comment-trigger routes don't make real API calls
+vi.mock('../../src/infrastructure/vcs/github.service.js', () => ({
+  githubService: {
+    getPullRequest: vi.fn().mockResolvedValue({
+      headRef: 'feature-x',
+      baseRef: 'main',
+      headSha: 'abc1234567890abcdef',
+      cloneUrl: 'https://github.com/myorg/myrepo.git',
+    }),
+  },
+}));
+
+vi.mock('../../src/infrastructure/vcs/gitlab.service.js', () => ({
+  gitlabService: {
+    getMergeRequest: vi.fn().mockResolvedValue({
+      baseSha: 'base123',
+      startSha: 'start456',
+      headSha: 'def567890abcdef1234',
+    }),
+  },
+}));
+
 import { buildApp } from '../../src/presentation/web/app.js';
 
 const GITHUB_SECRET = 'github-test-secret';
@@ -241,6 +263,121 @@ describe('Webhook Integration', () => {
           startSha: 'start456',
         }),
       );
+    });
+  });
+
+  describe('POST /webhooks/github — /fix comment trigger', () => {
+    const ISSUE_COMMENT_PAYLOAD = {
+      action: 'created',
+      issue: {
+        number: 42,
+        pull_request: {},
+      },
+      comment: { body: '/fix' },
+      repository: {
+        name: 'myrepo',
+        owner: { login: 'myorg' },
+        clone_url: 'https://github.com/myorg/myrepo.git',
+      },
+    };
+
+    it('enqueues a fix job for /fix comment', async () => {
+      const body = JSON.stringify(ISSUE_COMMENT_PAYLOAD);
+      const res = await request
+        .post('/webhooks/github')
+        .set('Content-Type', 'application/json')
+        .set('X-GitHub-Event', 'issue_comment')
+        .set('X-Hub-Signature-256', githubSig(body))
+        .send(body);
+
+      expect(res.status).toBe(202);
+      expect(res.body.status).toBe('enqueued');
+      expect(reviewQueue.addJob).toHaveBeenCalledWith(
+        'github-fix',
+        expect.objectContaining({ jobType: 'fix', provider: 'github', prNumber: 42 }),
+      );
+    });
+
+    it('enqueues a review job for /review comment', async () => {
+      const payload = { ...ISSUE_COMMENT_PAYLOAD, comment: { body: '/review' } };
+      const body = JSON.stringify(payload);
+      const res = await request
+        .post('/webhooks/github')
+        .set('Content-Type', 'application/json')
+        .set('X-GitHub-Event', 'issue_comment')
+        .set('X-Hub-Signature-256', githubSig(body))
+        .send(body);
+
+      expect(res.status).toBe(202);
+      expect(reviewQueue.addJob).toHaveBeenCalledWith(
+        'github-review',
+        expect.objectContaining({ jobType: 'review', provider: 'github' }),
+      );
+    });
+
+    it('ignores comments without /review or /fix', async () => {
+      const payload = { ...ISSUE_COMMENT_PAYLOAD, comment: { body: 'looks good to me' } };
+      const body = JSON.stringify(payload);
+      const res = await request
+        .post('/webhooks/github')
+        .set('Content-Type', 'application/json')
+        .set('X-GitHub-Event', 'issue_comment')
+        .set('X-Hub-Signature-256', githubSig(body))
+        .send(body);
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('ignored');
+    });
+  });
+
+  describe('POST /webhooks/gitlab — /fix comment trigger', () => {
+    const NOTE_HOOK_PAYLOAD = {
+      object_kind: 'note',
+      object_attributes: {
+        note: '/fix',
+        noteable_type: 'MergeRequest',
+      },
+      merge_request: {
+        iid: 5,
+        source_branch: 'feature-y',
+        target_branch: 'main',
+        last_commit: { id: 'def567890abcdef1234' },
+        target: { git_http_url: 'https://gitlab.com/myorg/myrepo.git' },
+        diff_refs: {
+          base_sha: 'base123',
+          start_sha: 'start456',
+          head_sha: 'def567890abcdef1234',
+        },
+      },
+      project: { id: 123 },
+    };
+
+    it('enqueues a fix job for /fix note', async () => {
+      const res = await request
+        .post('/webhooks/gitlab')
+        .set('Content-Type', 'application/json')
+        .set('X-Gitlab-Token', GITLAB_SECRET)
+        .set('X-Gitlab-Event', 'Note Hook')
+        .send(JSON.stringify(NOTE_HOOK_PAYLOAD));
+
+      expect(res.status).toBe(202);
+      expect(reviewQueue.addJob).toHaveBeenCalledWith(
+        'gitlab-fix',
+        expect.objectContaining({ jobType: 'fix', provider: 'gitlab', mrIid: 5 }),
+      );
+    });
+
+    it('ignores notes without /review or /fix', async () => {
+      const payload = { ...NOTE_HOOK_PAYLOAD, object_attributes: { ...NOTE_HOOK_PAYLOAD.object_attributes, note: 'lgtm' } };
+      const res = await request
+        .post('/webhooks/gitlab')
+        .set('Content-Type', 'application/json')
+        .set('X-Gitlab-Token', GITLAB_SECRET)
+        .set('X-Gitlab-Event', 'Note Hook')
+        .send(JSON.stringify(payload));
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('ignored');
     });
   });
 });

@@ -9,5 +9,6 @@ process.env['GITLAB_WEBHOOK_SECRET'] = 'gitlab-test-secret';
 process.env['GITLAB_ACCESS_TOKEN'] = 'test-gl-token';
 process.env['ENABLE_REVIEW_BY_COMMENT'] = 'true';
 process.env['ENABLE_REVIEW_BY_MR_OPEN'] = 'true';
+process.env['ENABLE_FIX_BY_COMMENT'] = 'true';
 process.env['WORKSPACE_DIR'] = '/tmp/ai-reviewer-test';
 process.env['LOG_LEVEL'] = 'error';

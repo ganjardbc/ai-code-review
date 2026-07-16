@@ -148,3 +148,56 @@ describe('ParserService.parse', () => {
     });
   });
 });
+
+describe('ParserService.parseFix', () => {
+  it('parses valid fix JSON response', () => {
+    const raw = JSON.stringify({ fixes: [{ filePath: 'src/auth.ts', content: 'export const x = 1;' }] });
+    const result = parser.parseFix(raw);
+    expect(result.fixes).toHaveLength(1);
+    expect(result.fixes[0]).toMatchObject({ filePath: 'src/auth.ts', content: 'export const x = 1;' });
+  });
+
+  it('returns empty fixes for empty string', () => {
+    expect(parser.parseFix('').fixes).toHaveLength(0);
+  });
+
+  it('returns empty fixes for completely invalid input', () => {
+    expect(parser.parseFix('not json at all !!!').fixes).toHaveLength(0);
+  });
+
+  it('drops fixes missing content', () => {
+    const raw = JSON.stringify({ fixes: [{ filePath: 'src/auth.ts' }] });
+    const result = parser.parseFix(raw);
+    expect(result.fixes).toHaveLength(0);
+  });
+
+  it('drops fixes missing filePath', () => {
+    const raw = JSON.stringify({ fixes: [{ content: 'x' }] });
+    const result = parser.parseFix(raw);
+    expect(result.fixes).toHaveLength(0);
+  });
+
+  it('normalizes leading slashes and dot-slashes in filePath', () => {
+    const raw = JSON.stringify({
+      fixes: [
+        { filePath: '/src/auth.ts', content: 'a' },
+        { filePath: './src/db.ts', content: 'b' },
+      ],
+    });
+    const result = parser.parseFix(raw);
+    expect(result.fixes[0]?.filePath).toBe('src/auth.ts');
+    expect(result.fixes[1]?.filePath).toBe('src/db.ts');
+  });
+
+  it('strips markdown code block wrapper', () => {
+    const raw = '```json\n' + JSON.stringify({ fixes: [{ filePath: 'a.ts', content: 'x' }] }) + '\n```';
+    const result = parser.parseFix(raw);
+    expect(result.fixes).toHaveLength(1);
+  });
+
+  it('handles response with zero fixes', () => {
+    const raw = JSON.stringify({ fixes: [] });
+    const result = parser.parseFix(raw);
+    expect(result.fixes).toHaveLength(0);
+  });
+});

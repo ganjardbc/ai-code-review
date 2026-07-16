@@ -24,9 +24,24 @@ export interface PullRequestInfo {
   cloneUrl: string;
 }
 
+export interface OutstandingComment {
+  filePath: string;
+  lineNumber: number;
+  message: string;
+}
+
+export interface PostFixReplyOptions {
+  owner: string;
+  repo: string;
+  pullNumber: number;
+  body: string;
+}
+
 export interface IGithubClient {
   postReview(options: PostReviewOptions): Promise<void>;
   getPullRequest(owner: string, repo: string, pullNumber: number): Promise<PullRequestInfo>;
+  listOutstandingBotComments(owner: string, repo: string, pullNumber: number): Promise<OutstandingComment[]>;
+  postIssueComment(options: PostFixReplyOptions): Promise<void>;
 }
 
 export interface MergeRequestInfo {
@@ -35,7 +50,15 @@ export interface MergeRequestInfo {
   headSha: string;
 }
 
+export interface PostMrFixReplyOptions {
+  projectId: number;
+  mrIid: number;
+  body: string;
+}
+
 export interface IGitlabClient {
   postReview(options: PostMrReviewOptions): Promise<void>;
   getMergeRequest(projectId: number, mrIid: number): Promise<MergeRequestInfo>;
+  listOutstandingBotComments(projectId: number, mrIid: number): Promise<OutstandingComment[]>;
+  postMrNote(options: PostMrFixReplyOptions): Promise<void>;
 }

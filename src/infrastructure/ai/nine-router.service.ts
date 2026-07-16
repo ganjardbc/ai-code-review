@@ -1,6 +1,7 @@
 import axios, { type AxiosInstance, isAxiosError } from 'axios';
-import type { IAiProvider, ReviewResult } from '../../domain/interfaces/ai-provider.interface.js';
+import type { IAiProvider, ReviewResult, FixResult } from '../../domain/interfaces/ai-provider.interface.js';
 import type { IOutputParser } from '../../application/services/parser.service.js';
+import type { IFixOutputParser } from '../../application/services/parser.service.js';
 import { config } from '../../config/index.js';
 import { AiProviderError } from '../../domain/errors/app-errors.js';
 import { logger } from '../logging/logger.js';
@@ -29,9 +30,9 @@ interface ChatResponse {
 
 export class NineRouterService implements IAiProvider {
   private readonly client: AxiosInstance;
-  private readonly parser: IOutputParser;
+  private readonly parser: IOutputParser & IFixOutputParser;
 
-  constructor(parser: IOutputParser) {
+  constructor(parser: IOutputParser & IFixOutputParser) {
     this.parser = parser;
     this.client = axios.create({
       baseURL: config.NINE_ROUTER_BASE_URL,
@@ -59,15 +60,26 @@ export class NineRouterService implements IAiProvider {
       messages.push({ role: 'user', content: prompt });
     }
 
+    const raw = await this.sendChat(messages, 8192, 'review');
+    return this.parser.parse(raw);
+  }
+
+  async fix(prompt: string): Promise<FixResult> {
+    const messages: ChatMessage[] = [{ role: 'user', content: prompt }];
+    const raw = await this.sendChat(messages, 16384, 'fix');
+    return this.parser.parseFix(raw);
+  }
+
+  private async sendChat(messages: ChatMessage[], maxTokens: number, label: string): Promise<string> {
     const payload: ChatRequest = {
       model: config.NINE_ROUTER_MODEL,
       messages,
       temperature: 0.1,
       response_format: { type: 'json_object' },
-      max_tokens: 8192,
+      max_tokens: maxTokens,
     };
 
-    logger.info('Sending review request to 9Router');
+    logger.info(`Sending ${label} request to 9Router`);
 
     try {
       const response = await this.client.post<ChatResponse>('/chat/completions', payload);
@@ -80,7 +92,7 @@ export class NineRouterService implements IAiProvider {
         logger.warn('AI response truncated by max_tokens before completion', undefined, { length: raw.length });
       }
 
-      return this.parser.parse(raw);
+      return raw;
     } catch (err) {
       if (isAxiosError(err)) {
         const status = err.response?.status ?? 0;

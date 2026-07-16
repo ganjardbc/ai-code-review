@@ -107,4 +107,36 @@ export class GitService implements IGitService {
 
     return diff;
   }
+
+  async commitAll(targetDir: string, message: string): Promise<boolean> {
+    assertInsideWorkspace(targetDir);
+
+    await runGit(['add', '-A'], targetDir);
+
+    const status = await runGit(['status', '--porcelain'], targetDir);
+    if (!status.trim()) {
+      logger.info('No changes to commit', undefined, { targetDir });
+      return false;
+    }
+
+    await runGit(
+      [
+        '-c', 'user.name=ai-code-review-bot',
+        '-c', 'user.email=ai-code-review-bot@users.noreply.github.com',
+        'commit',
+        '-m', message,
+      ],
+      targetDir,
+    );
+
+    logger.info('Committed fix changes', undefined, { targetDir });
+    return true;
+  }
+
+  async push(targetDir: string, remoteUrl: string, branch: string): Promise<void> {
+    assertInsideWorkspace(targetDir);
+
+    logger.info('Pushing fix commit', undefined, { branch });
+    await runGit(['push', '--', remoteUrl, `HEAD:refs/heads/${branch}`], targetDir);
+  }
 }

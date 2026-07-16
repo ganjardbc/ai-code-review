@@ -47,6 +47,7 @@ export const configSchema = z.object({
 
   ENABLE_REVIEW_BY_COMMENT: boolEnvVar(),
   ENABLE_REVIEW_BY_MR_OPEN: boolEnvVar(),
+  ENABLE_FIX_BY_COMMENT: boolEnvVar('false'),
 
   WORKSPACE_DIR: z.string().default('/tmp/ai-reviewer/workspace'),
 

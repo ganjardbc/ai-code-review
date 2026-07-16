@@ -1,5 +1,5 @@
 import Ajv from 'ajv';
-import type { AiReviewComment, ReviewResult } from '../../domain/interfaces/ai-provider.interface.js';
+import type { AiReviewComment, ReviewResult, FileFix, FixResult } from '../../domain/interfaces/ai-provider.interface.js';
 import { logger } from '../../infrastructure/logging/logger.js';
 
 // Loose top-level schema: only checks that `comments` is an array of objects.
@@ -28,9 +28,33 @@ const COMMENT_SCHEMA = {
   additionalProperties: true,
 };
 
+const FIX_SCHEMA = {
+  type: 'object',
+  properties: {
+    fixes: {
+      type: 'array',
+      items: { type: 'object' },
+    },
+  },
+  required: ['fixes'],
+  additionalProperties: true,
+};
+
+const FIX_ITEM_SCHEMA = {
+  type: 'object',
+  properties: {
+    filePath: { type: 'string' },
+    content: { type: 'string' },
+  },
+  required: ['filePath', 'content'],
+  additionalProperties: true,
+};
+
 const ajv = new Ajv({ allErrors: true });
 const validateReview = ajv.compile(REVIEW_SCHEMA);
 const validateComment = ajv.compile(COMMENT_SCHEMA);
+const validateFix = ajv.compile(FIX_SCHEMA);
+const validateFixItem = ajv.compile(FIX_ITEM_SCHEMA);
 
 function stripMarkdown(text: string): string {
   return text
@@ -190,7 +214,59 @@ export interface IOutputParser {
   parse(rawText: string): ReviewResult;
 }
 
-export class ParserService implements IOutputParser {
+export interface IFixOutputParser {
+  parseFix(rawText: string): FixResult;
+}
+
+export class ParserService implements IOutputParser, IFixOutputParser {
+  parseFix(rawText: string): FixResult {
+    if (!rawText.trim()) {
+      logger.warn('AI returned empty fix response');
+      return { fixes: [] };
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = parseRaw(rawText);
+    } catch (err) {
+      logger.error('Failed to parse AI fix response', err instanceof Error ? err : new Error(String(err)));
+      return { fixes: [] };
+    }
+
+    if (!validateFix(parsed)) {
+      logger.warn('AI fix response failed schema validation', undefined, { errors: validateFix.errors });
+      return { fixes: [] };
+    }
+
+    const raw = parsed as { fixes: unknown[] };
+    const valid: FileFix[] = [];
+    let dropped = 0;
+
+    for (const item of raw.fixes) {
+      if (validateFixItem(item)) {
+        const fix = item as unknown as FileFix;
+        let normalizedPath = fix.filePath.trim();
+        if (normalizedPath.startsWith('/')) {
+          normalizedPath = normalizedPath.substring(1);
+        } else if (normalizedPath.startsWith('./')) {
+          normalizedPath = normalizedPath.substring(2);
+        }
+        fix.filePath = normalizedPath;
+        valid.push(fix);
+      } else {
+        dropped++;
+      }
+    }
+
+    if (dropped > 0) {
+      logger.warn(`Dropped ${dropped} invalid fix(es) from AI response`);
+    }
+
+    logger.info('AI fix response parsed', undefined, { total: raw.fixes.length, valid: valid.length, dropped });
+
+    return { fixes: valid };
+  }
+
   parse(rawText: string): ReviewResult {
     if (!rawText.trim()) {
       logger.warn('AI returned empty response');

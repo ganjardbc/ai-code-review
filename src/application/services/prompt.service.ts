@@ -94,11 +94,51 @@ function splitByFile(diff: string): Array<{ header: string; content: string; pat
   return blocks;
 }
 
+export interface FixFileInput {
+  filePath: string;
+  content: string;
+  issues: Array<{ lineNumber: number; message: string }>;
+}
+
+const FIX_SYSTEM_PROMPT = `You are an expert senior software developer fixing issues found during code review.
+
+For each file below, you are given its full current content and the list of review issues raised against it.
+Resolve every listed issue by rewriting the file. Preserve all unrelated code exactly as-is — do not reformat,
+refactor, or change anything not required to fix the listed issues.
+
+Return your answer ONLY as a valid, parseable JSON object. Do NOT include markdown wraps (like \`\`\`json), introduction text, or conclusion text.
+
+Required output format:
+{
+  "fixes": [
+    {
+      "filePath": "relative/path/to/file.ts",
+      "content": "<the full corrected file content>"
+    }
+  ]
+}
+
+If a file's issues cannot be safely fixed, omit that file from "fixes".`;
+
+function buildFixSection(file: FixFileInput): string {
+  const issuesList = file.issues.map((i) => `- Line ${i.lineNumber}: ${i.message}`).join('\n');
+  return `--- FILE: ${file.filePath} ---\nIssues:\n${issuesList}\n\nCurrent content:\n${file.content}`;
+}
+
 export interface IPromptBuilder {
   build(diffText: string): string;
 }
 
-export class PromptService implements IPromptBuilder {
+export interface IFixPromptBuilder {
+  buildFix(files: FixFileInput[]): string;
+}
+
+export class PromptService implements IPromptBuilder, IFixPromptBuilder {
+  buildFix(files: FixFileInput[]): string {
+    const sections = files.map(buildFixSection).join('\n\n');
+    return `${FIX_SYSTEM_PROMPT}\n\n${sections}`;
+  }
+
   build(diffText: string): string {
     const files = splitByFile(diffText);
 

@@ -89,3 +89,32 @@ index 000..111
     expect(result).toContain('GIT DIFF');
   });
 });
+
+describe('PromptService.buildFix', () => {
+  it('includes file path, issues, and current content', () => {
+    const result = ps.buildFix([
+      {
+        filePath: 'src/auth.ts',
+        content: 'export function login() {}',
+        issues: [{ lineNumber: 3, message: 'Missing input validation' }],
+      },
+    ]);
+
+    expect(result).toContain('src/auth.ts');
+    expect(result).toContain('Missing input validation');
+    expect(result).toContain('export function login() {}');
+    expect(result).toContain('Line 3');
+  });
+
+  it('includes a section per file for multiple files', () => {
+    const result = ps.buildFix([
+      { filePath: 'a.ts', content: 'contentA', issues: [{ lineNumber: 1, message: 'issueA' }] },
+      { filePath: 'b.ts', content: 'contentB', issues: [{ lineNumber: 2, message: 'issueB' }] },
+    ]);
+
+    expect(result).toContain('a.ts');
+    expect(result).toContain('contentA');
+    expect(result).toContain('b.ts');
+    expect(result).toContain('contentB');
+  });
+});
