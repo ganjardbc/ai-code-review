@@ -32,7 +32,7 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
   git ca-certificates wget \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g opencode-ai
+
 
 RUN groupadd -r appgroup && useradd -r -m -d /home/appuser -g appgroup appuser
 
