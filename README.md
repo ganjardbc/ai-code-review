@@ -1,6 +1,6 @@
 # AI Code Reviewer
 
-Self-hosted AI code reviewer that integrates with GitHub and GitLab. Posts inline review comments on PRs/MRs automatically via webhooks or on-demand via `/review` comments.
+Self-hosted AI code reviewer that integrates with GitHub and GitLab. Posts inline review comments on PRs/MRs automatically via webhooks or on-demand via `/review` comments, and can auto-apply fixes for those comments via `/fix`.
 
 ## How it works
 
@@ -13,9 +13,10 @@ Webhook (GitHub / GitLab)
   → Worker process  (clones repo, generates diff, calls AI, posts review)
 ```
 
-Trigger modes (both enabled by default):
-- **PR/MR open/reopen/sync** — reviews automatically on lifecycle events
-- **`/review` comment** — post `/review` in any PR/MR comment to trigger on demand
+Trigger modes:
+- **PR/MR open/reopen/sync** — reviews automatically on lifecycle events (enabled by default)
+- **`/review` comment** — post `/review` in any PR/MR comment to trigger a review on demand (enabled by default)
+- **`/fix` comment** — post `/fix` in any PR/MR comment to fetch outstanding AI review comments, apply fixes, and push a commit directly to the PR/MR branch (disabled by default — see `ENABLE_FIX_BY_COMMENT`)
 
 ## Requirements
 
@@ -68,10 +69,13 @@ Copy `.env.example` to `.env` and fill in:
 | `OPENCODE_COMMAND` | When `AI_RUNNER=opencode` | CLI binary name (default: `opencode`) |
 | `ENABLE_REVIEW_BY_COMMENT` | No | `true`/`false` — enable `/review` comment trigger (default: `true`) |
 | `ENABLE_REVIEW_BY_MR_OPEN` | No | `true`/`false` — enable PR/MR open trigger (default: `true`) |
+| `ENABLE_FIX_BY_COMMENT` | No | `true`/`false` — enable `/fix` comment trigger (default: `false`) |
 | `WORKSPACE_DIR` | No | Where repos are cloned (default: `/tmp/ai-reviewer/workspace`) |
 | `PORT` | No | Server port (default: `3000`) |
 
 *At least one platform (GitHub or GitLab) must be configured.
+
+> **Note**: `/fix` pushes commits directly to the PR/MR branch, so `GITHUB_ACCESS_TOKEN`/`GITLAB_ACCESS_TOKEN` need write (not just read) access to the repository when `ENABLE_FIX_BY_COMMENT=true`.
 
 ## Webhook setup
 

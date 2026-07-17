@@ -1,6 +1,7 @@
 import { logger } from './infrastructure/logging/logger.js';
 import { QueueWorker } from './infrastructure/queue/worker.js';
 import { ProcessReviewUseCase } from './application/use-cases/process-review.use-case.js';
+import { ProcessFixUseCase } from './application/use-cases/process-fix.use-case.js';
 import { GitService } from './infrastructure/git/git.service.js';
 import { WorkspaceManager } from './infrastructure/git/workspace.manager.js';
 import { createRunner } from './infrastructure/ai/runner.factory.js';
@@ -19,7 +20,7 @@ const notifier =
     ? new TelegramNotifier(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID)
     : undefined;
 
-const useCase = new ProcessReviewUseCase({
+const reviewUseCase = new ProcessReviewUseCase({
   gitService: new GitService(),
   workspaceManager: new WorkspaceManager(),
   aiProvider,
@@ -30,8 +31,23 @@ const useCase = new ProcessReviewUseCase({
   notifier,
 });
 
+const fixUseCase = new ProcessFixUseCase({
+  gitService: new GitService(),
+  workspaceManager: new WorkspaceManager(),
+  aiProvider,
+  fixPromptBuilder: promptService,
+  githubClient: githubService,
+  gitlabClient: gitlabService,
+  notifier,
+});
+
 const worker = new QueueWorker(async (job) => {
-  await useCase.execute(job.data as JobPayload);
+  const payload = job.data as JobPayload;
+  if (payload.jobType === 'fix') {
+    await fixUseCase.execute(payload);
+  } else {
+    await reviewUseCase.execute(payload);
+  }
 });
 
 worker.start();

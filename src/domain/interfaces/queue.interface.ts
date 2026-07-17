@@ -5,6 +5,7 @@ export interface IQueue {
 
 export interface JobPayload {
   jobId: string;
+  jobType: 'review' | 'fix';
   provider: 'github' | 'gitlab';
   cloneUrl: string;
   headRef: string;

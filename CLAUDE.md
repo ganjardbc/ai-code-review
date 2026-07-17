@@ -74,10 +74,16 @@ Two independent Node.js processes share a BullMQ queue via Redis:
 
 Two trigger types per platform, both use the same `/webhooks/github` and `/webhooks/gitlab` endpoints:
 
-1. **PR/MR lifecycle** (`pull_request` / `Merge Request Hook`): actions `opened`, `reopened`, `synchronize` / `open`, `reopen`, `update`.
-2. **Comment command** (`issue_comment` / `Note Hook`): comment body matching `/^\s*\/review\b/i` on an open PR/MR.
+1. **PR/MR lifecycle** (`pull_request` / `Merge Request Hook`): actions `opened`, `reopened`, `synchronize` / `open`, `reopen`, `update`. Always enqueues a `review` job.
+2. **Comment command** (`issue_comment` / `Note Hook`): comment body matching `/^\s*\/review\b/i` (review) or `/^\s*\/fix\b/i` (fix) on an open PR/MR. `JobPayload.jobType` (`'review' | 'fix'`) carries the distinction through the queue; the worker dispatches to `ProcessReviewUseCase` or `ProcessFixUseCase` accordingly. Job names are `github-review`/`github-fix` and `gitlab-review`/`gitlab-fix`.
 
 The comment trigger for GitHub requires a `getPullRequest()` API call to fetch branch info (not present in `issue_comment` payload).
+
+**`/fix` flow** (gated by `ENABLE_FIX_BY_COMMENT`, default `false`): `ProcessFixUseCase` fetches outstanding AI-authored review comments via `IGithubClient.listOutstandingBotComments`/`IGitlabClient.listOutstandingBotComments` (comments are tagged with a hidden marker, `infrastructure/vcs/bot-marker.ts`, when posted by `postReview`), clones the PR/MR branch, reads the current content of each affected file, asks the AI provider for full corrected file content (`IAiProvider.fix`, `PromptService.buildFix`), writes the results back, commits, and pushes directly to the PR/MR's head branch — then posts a summary comment. AI-returned fixes for files outside the original outstanding-comment set are dropped as a safety guard.
+
+- GitHub's `listOutstandingBotComments` uses the GraphQL `reviewThreads` API (not REST `pulls.listReviewComments`) so it can filter out threads already marked `isResolved` — otherwise `/fix` would keep re-fixing comments a human already resolved. GitLab's discussion notes carry a `resolved` field natively via REST.
+- `GitService.push` retries once on a non-fast-forward rejection (branch moved since clone): it fetches the remote branch and rebases the local fix commit onto it before retrying. A genuine rebase conflict aborts the rebase and raises a clear `GitError` instead of leaving the workspace mid-rebase.
+- Both use cases notify via the optional `INotifier` (`notifyReviewComplete/Failed`, `notifyFixComplete/Failed`) — currently implemented by `TelegramNotifier`. `job-info.util.ts` holds the shared `buildPrUrl`/`repoLabel` helpers (the GitLab URL variant strips embedded Basic Auth credentials from `cloneUrl` before building the notification link).
 
 ### Critical implementation details
 

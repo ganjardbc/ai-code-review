@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
-import type { IAiProvider, ReviewResult } from '../../domain/interfaces/ai-provider.interface.js';
-import type { IOutputParser } from '../../application/services/parser.service.js';
+import type { IAiProvider, ReviewResult, FixResult } from '../../domain/interfaces/ai-provider.interface.js';
+import type { IOutputParser, IFixOutputParser } from '../../application/services/parser.service.js';
 import { AiProviderError } from '../../domain/errors/app-errors.js';
 import { logger } from '../logging/logger.js';
 
@@ -23,7 +23,7 @@ function extractTextFromEvents(ndjson: string): string {
 
 export class OpenCodeRunner implements IAiProvider {
   constructor(
-    private readonly parser: IOutputParser,
+    private readonly parser: IOutputParser & IFixOutputParser,
     private readonly timeoutMs: number = 120_000,
     private readonly command: string = 'opencode',
   ) {}
@@ -36,6 +36,16 @@ export class OpenCodeRunner implements IAiProvider {
     logger.debug('Received opencode response', undefined, { length: raw.length });
 
     return this.parser.parse(raw);
+  }
+
+  async fix(prompt: string): Promise<FixResult> {
+    logger.info('Sending fix request to opencode CLI');
+
+    const raw = await this.execute(prompt);
+
+    logger.debug('Received opencode fix response', undefined, { length: raw.length });
+
+    return this.parser.parseFix(raw);
   }
 
   private execute(prompt: string): Promise<string> {

@@ -112,4 +112,52 @@ describe('TelegramNotifier', () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  it('sends correct payload on notifyFixComplete', async () => {
+    mockFetch.mockReturnValueOnce(okResponse());
+    await notifier.notifyFixComplete({
+      jobId: 'f1',
+      provider: 'github',
+      repoLabel: 'owner/repo',
+      prNumber: 42,
+      filesFixed: 2,
+      durationMs: 4200,
+      prUrl: 'https://github.com/owner/repo/pull/42',
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body['text']).toContain('owner/repo #42');
+    expect(body['text']).toContain('2 files fixed');
+    expect(body['text']).toContain('https://github.com/owner/repo/pull/42');
+  });
+
+  it('pluralises fixed file count correctly', async () => {
+    mockFetch.mockReturnValueOnce(okResponse());
+    await notifier.notifyFixComplete({
+      jobId: 'f2',
+      provider: 'gitlab',
+      repoLabel: 'group/project',
+      prNumber: 3,
+      filesFixed: 1,
+      durationMs: 1000,
+    });
+    const body = JSON.parse(mockFetch.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body['text']).toContain('1 file fixed');
+  });
+
+  it('sends correct payload on notifyFixFailed', async () => {
+    mockFetch.mockReturnValueOnce(okResponse());
+    await notifier.notifyFixFailed({
+      jobId: 'f3',
+      provider: 'gitlab',
+      repoLabel: 'group/project',
+      prNumber: 7,
+      errorMessage: 'push rejected',
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body['text']).toContain('group/project #7');
+    expect(body['text']).toContain('push rejected');
+    expect(body['text']).toContain('❌');
+  });
 });

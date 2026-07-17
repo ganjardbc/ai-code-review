@@ -1,7 +1,22 @@
 import { Gitlab } from '@gitbeaker/rest';
-import type { IGitlabClient, MergeRequestInfo, PostMrReviewOptions } from '../../domain/interfaces/vcs-client.interface.js';
+import type {
+  IGitlabClient,
+  MergeRequestInfo,
+  PostMrReviewOptions,
+  OutstandingComment,
+  PostMrFixReplyOptions,
+} from '../../domain/interfaces/vcs-client.interface.js';
 import { config } from '../../config/index.js';
 import { logger } from '../logging/logger.js';
+import { withBotMarker, hasBotMarker } from './bot-marker.js';
+
+const BODY_POSITION_PATTERN = /`([^`\s:]+):(\d+)`/;
+
+function extractPositionFromBody(body: string): { filePath: string; lineNumber: number } | undefined {
+  const match = BODY_POSITION_PATTERN.exec(body);
+  if (!match) return undefined;
+  return { filePath: match[1]!, lineNumber: Number(match[2]) };
+}
 
 export class GitlabService implements IGitlabClient {
   private readonly api: InstanceType<typeof Gitlab>;
@@ -26,7 +41,7 @@ export class GitlabService implements IGitlabClient {
     const hasValidDiffRefs = baseSha !== headSha;
 
     for (const comment of comments) {
-      const body = `**[${comment.severity}]** \`${comment.filePath}:${comment.lineNumber}\` ${comment.message}`;
+      const body = withBotMarker(`**[${comment.severity}]** \`${comment.filePath}:${comment.lineNumber}\` ${comment.message}`);
       try {
         if (hasValidDiffRefs) {
           try {
@@ -70,6 +85,34 @@ export class GitlabService implements IGitlabClient {
       posted,
       failed: failures.length,
     });
+  }
+
+  async listOutstandingBotComments(projectId: number, mrIid: number): Promise<OutstandingComment[]> {
+    const discussions = await this.api.MergeRequestDiscussions.all(projectId, mrIid);
+
+    const outstanding: OutstandingComment[] = [];
+    for (const discussion of discussions) {
+      const notes = (discussion.notes ?? []) as unknown as Array<{ body?: string; resolved?: boolean; position?: { new_path?: string; new_line?: number } }>;
+      for (const note of notes) {
+        const body = note.body ?? '';
+        if (!hasBotMarker(body) || note.resolved) continue;
+
+        const position = note.position;
+        const fallback = position?.new_path ? undefined : extractPositionFromBody(body);
+        const filePath = position?.new_path ?? fallback?.filePath;
+        const lineNumber = position?.new_line ?? fallback?.lineNumber;
+        if (!filePath || lineNumber == null) continue;
+
+        outstanding.push({ filePath, lineNumber, message: body });
+      }
+    }
+
+    return outstanding;
+  }
+
+  async postMrNote(options: PostMrFixReplyOptions): Promise<void> {
+    const { projectId, mrIid, body } = options;
+    await this.api.MergeRequestNotes.create(projectId, mrIid, body);
   }
 
   async getMergeRequest(projectId: number, mrIid: number): Promise<MergeRequestInfo> {

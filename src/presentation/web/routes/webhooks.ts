@@ -21,6 +21,7 @@ import type { JobPayload } from '../../../domain/interfaces/queue.interface.js';
 const GITHUB_PR_ACTIONS = new Set(['opened', 'reopened', 'synchronize']);
 const GITLAB_MR_ACTIONS = new Set(['open', 'reopen', 'update']);
 const REVIEW_COMMAND = /^\s*\/review\b/i;
+const FIX_COMMAND = /^\s*\/fix\b/i;
 
 function injectGitlabCredentials(rawUrl: string, token: string): string {
   const url = new URL(rawUrl);
@@ -61,12 +62,20 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(200).send({ status: 'ignored', reason: 'Comment on issue, not PR' });
       }
 
-      if (!REVIEW_COMMAND.test(payload.comment.body)) {
-        return reply.status(200).send({ status: 'ignored', reason: 'No /review command found' });
+      const isFixCommand = FIX_COMMAND.test(payload.comment.body);
+      const isReviewCommand = !isFixCommand && REVIEW_COMMAND.test(payload.comment.body);
+
+      if (!isFixCommand && !isReviewCommand) {
+        return reply.status(200).send({ status: 'ignored', reason: 'No /review or /fix command found' });
       }
 
-      if (!config.ENABLE_REVIEW_BY_COMMENT) {
+      const jobType: 'review' | 'fix' = isFixCommand ? 'fix' : 'review';
+
+      if (jobType === 'review' && !config.ENABLE_REVIEW_BY_COMMENT) {
         return reply.status(200).send({ status: 'disabled', reason: 'Review by comment is disabled' });
+      }
+      if (jobType === 'fix' && !config.ENABLE_FIX_BY_COMMENT) {
+        return reply.status(200).send({ status: 'disabled', reason: 'Fix by comment is disabled' });
       }
 
       const owner = payload.repository.owner.login;
@@ -93,6 +102,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       const jobId = `git-${randomUUID()}`;
       const jobData: JobPayload = {
         jobId,
+        jobType,
         provider: 'github',
         cloneUrl: pr.cloneUrl,
         headRef: pr.headRef,
@@ -103,10 +113,11 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
         repoName: repo,
       };
 
-      const queuedId = await reviewQueue.addJob('github-review', jobData as unknown as Record<string, unknown>);
+      const queuedId = await reviewQueue.addJob(`github-${jobType}`, jobData as unknown as Record<string, unknown>);
 
       logger.info('GitHub PR comment trigger enqueued', undefined, {
         jobId: queuedId,
+        jobType,
         repo: `${owner}/${repo}`,
         pr: prNumber,
         head: pr.headRef,
@@ -156,6 +167,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     const jobId = `git-${randomUUID()}`;
     const jobData: JobPayload = {
       jobId,
+      jobType: 'review',
       provider: 'github',
       cloneUrl: payload.repository.clone_url,
       headRef,
@@ -206,9 +218,14 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(200).send({ status: 'ignored', reason: 'Note not on MergeRequest' });
       }
 
-      if (!REVIEW_COMMAND.test(payload.object_attributes.note)) {
-        return reply.status(200).send({ status: 'ignored', reason: 'No /review command found' });
+      const isFixCommand = FIX_COMMAND.test(payload.object_attributes.note);
+      const isReviewCommand = !isFixCommand && REVIEW_COMMAND.test(payload.object_attributes.note);
+
+      if (!isFixCommand && !isReviewCommand) {
+        return reply.status(200).send({ status: 'ignored', reason: 'No /review or /fix command found' });
       }
+
+      const jobType: 'review' | 'fix' = isFixCommand ? 'fix' : 'review';
 
       const mr = payload.merge_request;
       if (!mr) {
@@ -219,8 +236,11 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
-      if (!config.ENABLE_REVIEW_BY_COMMENT) {
+      if (jobType === 'review' && !config.ENABLE_REVIEW_BY_COMMENT) {
         return reply.status(200).send({ status: 'disabled', reason: 'Review by comment is disabled' });
+      }
+      if (jobType === 'fix' && !config.ENABLE_FIX_BY_COMMENT) {
+        return reply.status(200).send({ status: 'disabled', reason: 'Fix by comment is disabled' });
       }
 
       if (!isSafeBranchName(mr.source_branch) || !isSafeBranchName(mr.target_branch)) {
@@ -245,6 +265,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       const jobId = `gitlab-${randomUUID()}`;
       const jobData: JobPayload = {
         jobId,
+        jobType,
         provider: 'gitlab',
         cloneUrl: injectGitlabCredentials(mr.target.git_http_url, config.GITLAB_ACCESS_TOKEN),
         headRef: mr.source_branch,
@@ -256,10 +277,11 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
         startSha: diffRefs?.start_sha,
       };
 
-      const queuedId = await reviewQueue.addJob('gitlab-review', jobData as unknown as Record<string, unknown>);
+      const queuedId = await reviewQueue.addJob(`gitlab-${jobType}`, jobData as unknown as Record<string, unknown>);
 
       logger.info('GitLab MR comment trigger enqueued', undefined, {
         jobId: queuedId,
+        jobType,
         projectId: payload.project.id,
         mrIid: mr.iid,
         source: mr.source_branch,
@@ -309,6 +331,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     const jobId = `gitlab-${randomUUID()}`;
     const jobData: JobPayload = {
       jobId,
+      jobType: 'review',
       provider: 'gitlab',
       cloneUrl: injectGitlabCredentials(payload.object_attributes.target.git_http_url, config.GITLAB_ACCESS_TOKEN),
       headRef: sourceBranch,
