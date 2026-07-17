@@ -41,7 +41,7 @@ describe('GithubService.listOutstandingBotComments', () => {
       page([
         {
           isResolved: false,
-          comments: { nodes: [{ body: BOT_BODY, path: 'src/auth.ts', line: 10, originalLine: 10 }] },
+          comments: { nodes: [{ body: BOT_BODY, path: 'src/auth.ts', line: 10 }] },
         },
       ]),
     );
@@ -55,7 +55,7 @@ describe('GithubService.listOutstandingBotComments', () => {
       page([
         {
           isResolved: true,
-          comments: { nodes: [{ body: BOT_BODY, path: 'src/auth.ts', line: 10, originalLine: 10 }] },
+          comments: { nodes: [{ body: BOT_BODY, path: 'src/auth.ts', line: 10 }] },
         },
       ]),
     );
@@ -69,7 +69,7 @@ describe('GithubService.listOutstandingBotComments', () => {
       page([
         {
           isResolved: false,
-          comments: { nodes: [{ body: 'a human reply', path: 'src/auth.ts', line: 10, originalLine: 10 }] },
+          comments: { nodes: [{ body: 'a human reply', path: 'src/auth.ts', line: 10 }] },
         },
       ]),
     );
@@ -78,31 +78,31 @@ describe('GithubService.listOutstandingBotComments', () => {
     expect(result).toHaveLength(0);
   });
 
-  it('falls back to originalLine when line is null (outdated comment)', async () => {
+  it('skips comments with a null line (outdated diff position)', async () => {
     graphqlMock.mockResolvedValueOnce(
       page([
         {
           isResolved: false,
-          comments: { nodes: [{ body: BOT_BODY, path: 'src/auth.ts', line: null, originalLine: 7 }] },
+          comments: { nodes: [{ body: BOT_BODY, path: 'src/auth.ts', line: null }] },
         },
       ]),
     );
 
     const result = await service.listOutstandingBotComments('myorg', 'myrepo', 42);
-    expect(result).toEqual([{ filePath: 'src/auth.ts', lineNumber: 7, message: BOT_BODY }]);
+    expect(result).toHaveLength(0);
   });
 
   it('paginates through multiple pages of review threads', async () => {
     graphqlMock
       .mockResolvedValueOnce(
         page(
-          [{ isResolved: false, comments: { nodes: [{ body: BOT_BODY, path: 'a.ts', line: 1, originalLine: 1 }] } }],
+          [{ isResolved: false, comments: { nodes: [{ body: BOT_BODY, path: 'a.ts', line: 1 }] } }],
           true,
           'cursor-1',
         ),
       )
       .mockResolvedValueOnce(
-        page([{ isResolved: false, comments: { nodes: [{ body: BOT_BODY, path: 'b.ts', line: 2, originalLine: 2 }] } }]),
+        page([{ isResolved: false, comments: { nodes: [{ body: BOT_BODY, path: 'b.ts', line: 2 }] } }]),
       );
 
     const result = await service.listOutstandingBotComments('myorg', 'myrepo', 42);

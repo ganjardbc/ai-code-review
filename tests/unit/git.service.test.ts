@@ -1,6 +1,6 @@
 import '../mocks/env.js';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync, readFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { GitService } from '../../src/infrastructure/git/git.service.js';
@@ -101,5 +101,27 @@ describe('GitService.commitAll / push', () => {
     await gitService.commitAll(targetDir, 'fix: conflicting change');
 
     await expect(gitService.push(targetDir, originPath, 'main')).rejects.toThrow(/conflict/i);
+  });
+
+  it('does not retry a policy rejection (e.g. protected branch) as if it were a non-fast-forward', async () => {
+    const counterFile = `${originPath}-hook-calls`;
+    writeFileSync(counterFile, '');
+
+    const hookPath = join(originPath, 'hooks', 'pre-receive');
+    writeFileSync(
+      hookPath,
+      `#!/bin/sh\necho x >> "${counterFile}"\necho "remote rejected: protected branch hook declined" >&2\nexit 1\n`,
+    );
+    chmodSync(hookPath, 0o755);
+
+    writeFileSync(join(targetDir, 'file.txt'), 'my change\n');
+    await gitService.commitAll(targetDir, 'fix: my change');
+
+    await expect(gitService.push(targetDir, originPath, 'main')).rejects.toThrow();
+
+    const callCount = readFileSync(counterFile, 'utf-8').trim().split('\n').filter(Boolean).length;
+    expect(callCount).toBe(1);
+
+    rmSync(counterFile, { force: true });
   });
 });

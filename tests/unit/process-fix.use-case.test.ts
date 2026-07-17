@@ -205,6 +205,51 @@ describe('ProcessFixUseCase', () => {
     rmSync(workspaceRoot, { recursive: true, force: true });
   });
 
+  it('dedupes duplicate fix entries for the same file instead of double-counting', async () => {
+    const repoPath = join(workspaceRoot, 'repo');
+    mkdirSync(join(repoPath, 'src'), { recursive: true });
+    writeFileSync(join(repoPath, 'src', 'auth.ts'), 'original content\n');
+
+    const deps = makeDeps({
+      workspaceManager: {
+        createWorkspace: vi.fn().mockResolvedValue(workspaceRoot),
+        cleanupWorkspace: vi.fn().mockResolvedValue(undefined),
+        validatePath: vi.fn().mockReturnValue(true),
+      },
+      githubClient: {
+        postReview: vi.fn(),
+        getPullRequest: vi.fn(),
+        listOutstandingBotComments: vi.fn().mockResolvedValue([
+          { filePath: 'src/auth.ts', lineNumber: 1, message: 'Missing validation' },
+        ]),
+        postIssueComment: vi.fn().mockResolvedValue(undefined),
+      },
+      aiProvider: {
+        review: vi.fn(),
+        fix: vi.fn().mockResolvedValue({
+          fixes: [
+            { filePath: 'src/auth.ts', content: 'fixed content v1\n' },
+            { filePath: 'src/auth.ts', content: 'fixed content v2\n' },
+          ],
+        }),
+      },
+    });
+
+    const useCase = new ProcessFixUseCase(deps);
+    await useCase.execute(BASE_JOB);
+
+    expect(deps.gitService.commitAll).toHaveBeenCalledWith(
+      join(workspaceRoot, 'repo'),
+      expect.stringContaining('1 file'),
+    );
+    expect(deps.gitService.commitAll).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining('2 files'),
+    );
+
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
   it('skips commit/push when nothing was actually fixed', async () => {
     const deps = makeDeps({
       githubClient: {

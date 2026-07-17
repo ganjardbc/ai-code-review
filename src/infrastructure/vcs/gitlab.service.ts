@@ -10,6 +10,14 @@ import { config } from '../../config/index.js';
 import { logger } from '../logging/logger.js';
 import { withBotMarker, hasBotMarker } from './bot-marker.js';
 
+const BODY_POSITION_PATTERN = /`([^`\s:]+):(\d+)`/;
+
+function extractPositionFromBody(body: string): { filePath: string; lineNumber: number } | undefined {
+  const match = BODY_POSITION_PATTERN.exec(body);
+  if (!match) return undefined;
+  return { filePath: match[1]!, lineNumber: Number(match[2]) };
+}
+
 export class GitlabService implements IGitlabClient {
   private readonly api: InstanceType<typeof Gitlab>;
 
@@ -90,13 +98,12 @@ export class GitlabService implements IGitlabClient {
         if (!hasBotMarker(body) || note.resolved) continue;
 
         const position = note.position;
-        if (!position?.new_path || position.new_line == null) continue;
+        const fallback = position?.new_path ? undefined : extractPositionFromBody(body);
+        const filePath = position?.new_path ?? fallback?.filePath;
+        const lineNumber = position?.new_line ?? fallback?.lineNumber;
+        if (!filePath || lineNumber == null) continue;
 
-        outstanding.push({
-          filePath: position.new_path,
-          lineNumber: position.new_line,
-          message: body,
-        });
+        outstanding.push({ filePath, lineNumber, message: body });
       }
     }
 

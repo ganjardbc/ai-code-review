@@ -22,7 +22,10 @@ function assertInsideWorkspace(dirPath: string): void {
 }
 
 function isNonFastForwardError(err: unknown): boolean {
-  return err instanceof GitError && /non-fast-forward|fetch first|rejected/i.test(err.message);
+  // Deliberately excludes the generic "rejected" substring: branch-protection
+  // and pre-receive-hook denials also say "[remote rejected] ... declined"
+  // but aren't a real conflict, so retrying via rebase would be pointless.
+  return err instanceof GitError && /non-fast-forward|fetch first/i.test(err.message);
 }
 
 function runGit(args: string[], cwd: string): Promise<string> {

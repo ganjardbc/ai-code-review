@@ -80,8 +80,13 @@ export class ProcessFixUseCase {
       });
 
       const allowedPaths = new Set(fixInputs.map((f) => f.filePath));
-      let applied = 0;
+      const appliedPaths = new Set<string>();
+      const toWrite: Array<{ abs: string; content: string }> = [];
       for (const f of fixResult.fixes) {
+        if (appliedPaths.has(f.filePath)) {
+          logger.warn('Ignoring duplicate fix for the same file', undefined, { filePath: f.filePath });
+          continue;
+        }
         if (!allowedPaths.has(f.filePath)) {
           logger.warn('Ignoring fix for file outside requested scope', undefined, { filePath: f.filePath });
           continue;
@@ -91,9 +96,11 @@ export class ProcessFixUseCase {
           logger.warn('Ignoring fix with unsafe path', undefined, { filePath: f.filePath });
           continue;
         }
-        await writeFile(abs, f.content, 'utf-8');
-        applied++;
+        appliedPaths.add(f.filePath);
+        toWrite.push({ abs, content: f.content });
       }
+      await Promise.all(toWrite.map((w) => writeFile(w.abs, w.content, 'utf-8')));
+      const applied = appliedPaths.size;
 
       if (applied === 0) {
         logger.info('No fixes applied', undefined, { jobId: job.jobId });
@@ -174,30 +181,25 @@ export class ProcessFixUseCase {
       byFile.set(c.filePath, arr);
     }
 
-    const inputs: FixFileInput[] = [];
-    for (const [filePath, issues] of byFile) {
-      const abs = resolveWithinRepo(repoPath, filePath);
-      if (!abs) {
-        logger.warn('Skipping fix for path outside repo', undefined, { filePath });
-        continue;
-      }
+    const results = await Promise.all(
+      Array.from(byFile.entries()).map(async ([filePath, issues]): Promise<FixFileInput | undefined> => {
+        const abs = resolveWithinRepo(repoPath, filePath);
+        if (!abs) {
+          logger.warn('Skipping fix for path outside repo', undefined, { filePath });
+          return undefined;
+        }
 
-      let content: string;
-      try {
-        content = await readFile(abs, 'utf-8');
-      } catch {
-        logger.warn('Skipping fix: file not found in workspace', undefined, { filePath });
-        continue;
-      }
+        try {
+          const content = await readFile(abs, 'utf-8');
+          return { filePath, content, issues: issues.map((i) => ({ lineNumber: i.lineNumber, message: i.message })) };
+        } catch {
+          logger.warn('Skipping fix: file not found in workspace', undefined, { filePath });
+          return undefined;
+        }
+      }),
+    );
 
-      inputs.push({
-        filePath,
-        content,
-        issues: issues.map((i) => ({ lineNumber: i.lineNumber, message: i.message })),
-      });
-    }
-
-    return inputs;
+    return results.filter((r): r is FixFileInput => r !== undefined);
   }
 
   private async postSummary(

@@ -18,8 +18,8 @@ const REVIEW_THREADS_QUERY = `
           pageInfo { hasNextPage endCursor }
           nodes {
             isResolved
-            comments(first: 10) {
-              nodes { body path line originalLine }
+            comments(first: 100) {
+              nodes { body path line }
             }
           }
         }
@@ -32,7 +32,6 @@ interface ReviewThreadComment {
   body: string;
   path: string;
   line: number | null;
-  originalLine: number | null;
 }
 
 interface ReviewThreadsResponse {
@@ -125,10 +124,12 @@ export class GithubService implements IGithubClient {
         for (const comment of thread.comments.nodes) {
           if (!hasBotMarker(comment.body)) continue;
 
-          const line = comment.line ?? comment.originalLine;
-          if (!comment.path || line == null) continue;
+          // A null `line` means the comment's diff position is outdated (the
+          // file changed since it was posted) — skip it rather than fixing
+          // the wrong line, mirroring the old REST-based `line != null` filter.
+          if (!comment.path || comment.line == null) continue;
 
-          outstanding.push({ filePath: comment.path, lineNumber: line, message: comment.body });
+          outstanding.push({ filePath: comment.path, lineNumber: comment.line, message: comment.body });
         }
       }
 
