@@ -19,7 +19,7 @@ const REVIEW_THREADS_QUERY = `
           nodes {
             isResolved
             comments(first: 100) {
-              nodes { body path line }
+              nodes { body path line author { login } }
             }
           }
         }
@@ -32,6 +32,7 @@ interface ReviewThreadComment {
   body: string;
   path: string;
   line: number | null;
+  author: { login: string } | null;
 }
 
 interface ReviewThreadsResponse {
@@ -47,9 +48,17 @@ interface ReviewThreadsResponse {
 
 export class GithubService implements IGithubClient {
   private readonly octokit: Octokit;
+  private botLoginPromise: Promise<string> | undefined;
 
   constructor() {
     this.octokit = new Octokit({ auth: config.GITHUB_ACCESS_TOKEN });
+  }
+
+  private async getBotLogin(): Promise<string> {
+    if (!this.botLoginPromise) {
+      this.botLoginPromise = this.octokit.users.getAuthenticated().then((res) => res.data.login);
+    }
+    return this.botLoginPromise;
   }
 
   async postReview(options: PostReviewOptions): Promise<void> {
@@ -83,14 +92,67 @@ export class GithubService implements IGithubClient {
         pullNumber,
         commentCount: comments.length,
       });
+      return;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.error('Failed to post GitHub review', err instanceof Error ? err : new Error(msg), {
+      logger.warn('Batch GitHub review failed, falling back to per-comment posting', undefined, {
         owner,
         repo,
         pullNumber,
+        reason: msg,
       });
-      throw err;
+    }
+
+    // GitHub rejects the entire batch review if even one comment's line
+    // isn't part of the diff (a common AI hallucination). Fall back to
+    // posting comments one at a time so a single bad line doesn't drop
+    // every valid comment, mirroring the GitLab per-comment strategy.
+    let posted = 0;
+    const failures: string[] = [];
+    for (const c of comments) {
+      try {
+        await this.octokit.pulls.createReview({
+          owner,
+          repo,
+          pull_number: pullNumber,
+          commit_id: commitSha,
+          event: 'COMMENT',
+          comments: [{ path: c.filePath, line: c.lineNumber, side: 'RIGHT', body: withBotMarker(`**[${c.severity}]** ${c.message}`) }],
+        });
+        posted++;
+      } catch {
+        try {
+          await this.octokit.issues.createComment({
+            owner,
+            repo,
+            issue_number: pullNumber,
+            body: withBotMarker(`**[${c.severity}]** \`${c.filePath}:${c.lineNumber}\` ${c.message}`),
+          });
+          posted++;
+        } catch (err2) {
+          const msg2 = err2 instanceof Error ? err2.message : String(err2);
+          failures.push(`${c.filePath}:${c.lineNumber} — ${msg2}`);
+          logger.error('Failed to post GitHub comment', err2 instanceof Error ? err2 : new Error(msg2), {
+            owner,
+            repo,
+            pullNumber,
+            filePath: c.filePath,
+            lineNumber: c.lineNumber,
+          });
+        }
+      }
+    }
+
+    logger.info('Posted GitHub PR review comments', undefined, {
+      owner,
+      repo,
+      pullNumber,
+      posted,
+      failed: failures.length,
+    });
+
+    if (posted === 0) {
+      throw new Error(`Failed to post any GitHub review comments: ${failures.join('; ')}`);
     }
   }
 
@@ -105,6 +167,7 @@ export class GithubService implements IGithubClient {
   }
 
   async listOutstandingBotComments(owner: string, repo: string, pullNumber: number): Promise<OutstandingComment[]> {
+    const botLogin = await this.getBotLogin();
     const outstanding: OutstandingComment[] = [];
     let cursor: string | null = null;
 
@@ -122,6 +185,10 @@ export class GithubService implements IGithubClient {
         if (thread.isResolved) continue;
 
         for (const comment of thread.comments.nodes) {
+          // Marker string alone is forgeable by any commenter — the author
+          // must also be the bot's own account, or a forged comment could
+          // steer /fix into writing attacker-controlled content.
+          if (comment.author?.login !== botLogin) continue;
           if (!hasBotMarker(comment.body)) continue;
 
           // A null `line` means the comment's diff position is outdated (the

@@ -3,12 +3,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const graphqlMock = vi.fn();
 const createCommentMock = vi.fn().mockResolvedValue(undefined);
+const getAuthenticatedMock = vi.fn().mockResolvedValue({ data: { login: 'ai-code-review-bot' } });
 
 vi.mock('@octokit/rest', () => ({
   Octokit: class {
     graphql = graphqlMock;
     issues = { createComment: createCommentMock };
     pulls = { get: vi.fn(), createReview: vi.fn() };
+    users = { getAuthenticated: getAuthenticatedMock };
   },
 }));
 
@@ -41,7 +43,7 @@ describe('GithubService.listOutstandingBotComments', () => {
       page([
         {
           isResolved: false,
-          comments: { nodes: [{ body: BOT_BODY, path: 'src/auth.ts', line: 10 }] },
+          comments: { nodes: [{ body: BOT_BODY, path: 'src/auth.ts', line: 10, author: { login: 'ai-code-review-bot' } }] },
         },
       ]),
     );
@@ -55,7 +57,21 @@ describe('GithubService.listOutstandingBotComments', () => {
       page([
         {
           isResolved: true,
-          comments: { nodes: [{ body: BOT_BODY, path: 'src/auth.ts', line: 10 }] },
+          comments: { nodes: [{ body: BOT_BODY, path: 'src/auth.ts', line: 10, author: { login: 'ai-code-review-bot' } }] },
+        },
+      ]),
+    );
+
+    const result = await service.listOutstandingBotComments('myorg', 'myrepo', 42);
+    expect(result).toHaveLength(0);
+  });
+
+  it('excludes bot-marked comments forged by a non-bot author', async () => {
+    graphqlMock.mockResolvedValueOnce(
+      page([
+        {
+          isResolved: false,
+          comments: { nodes: [{ body: BOT_BODY, path: 'src/auth.ts', line: 10, author: { login: 'attacker' } }] },
         },
       ]),
     );
@@ -69,7 +85,7 @@ describe('GithubService.listOutstandingBotComments', () => {
       page([
         {
           isResolved: false,
-          comments: { nodes: [{ body: 'a human reply', path: 'src/auth.ts', line: 10 }] },
+          comments: { nodes: [{ body: 'a human reply', path: 'src/auth.ts', line: 10, author: { login: 'ai-code-review-bot' } }] },
         },
       ]),
     );
@@ -83,7 +99,7 @@ describe('GithubService.listOutstandingBotComments', () => {
       page([
         {
           isResolved: false,
-          comments: { nodes: [{ body: BOT_BODY, path: 'src/auth.ts', line: null }] },
+          comments: { nodes: [{ body: BOT_BODY, path: 'src/auth.ts', line: null, author: { login: 'ai-code-review-bot' } }] },
         },
       ]),
     );
@@ -96,13 +112,13 @@ describe('GithubService.listOutstandingBotComments', () => {
     graphqlMock
       .mockResolvedValueOnce(
         page(
-          [{ isResolved: false, comments: { nodes: [{ body: BOT_BODY, path: 'a.ts', line: 1 }] } }],
+          [{ isResolved: false, comments: { nodes: [{ body: BOT_BODY, path: 'a.ts', line: 1, author: { login: 'ai-code-review-bot' } }] } }],
           true,
           'cursor-1',
         ),
       )
       .mockResolvedValueOnce(
-        page([{ isResolved: false, comments: { nodes: [{ body: BOT_BODY, path: 'b.ts', line: 2 }] } }]),
+        page([{ isResolved: false, comments: { nodes: [{ body: BOT_BODY, path: 'b.ts', line: 2, author: { login: 'ai-code-review-bot' } }] } }]),
       );
 
     const result = await service.listOutstandingBotComments('myorg', 'myrepo', 42);

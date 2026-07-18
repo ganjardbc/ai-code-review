@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, realpath } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import type { IGitService, IWorkspaceManager } from '../../domain/interfaces/git.interface.js';
 import type { IAiProvider } from '../../domain/interfaces/ai-provider.interface.js';
@@ -31,10 +31,24 @@ function buildGithubPushUrl(cloneUrl: string, token: string): string {
   return url.toString();
 }
 
-function resolveWithinRepo(repoPath: string, filePath: string): string | undefined {
+async function resolveWithinRepo(repoPath: string, filePath: string): Promise<string | undefined> {
   const root = resolve(repoPath);
   const abs = resolve(join(root, filePath));
-  return abs.startsWith(root + '/') ? abs : undefined;
+  if (!abs.startsWith(root + '/')) return undefined;
+
+  // Lexical containment isn't enough: a symlink inside the repo can point
+  // outside the workspace. Resolve the real path and re-check containment
+  // so reads/writes can't escape via a malicious symlink in the PR branch.
+  // The workspace root itself may also sit behind a symlink (e.g. macOS
+  // /tmp -> /private/tmp), so resolve it the same way before comparing.
+  let real: string;
+  let realRoot: string;
+  try {
+    [real, realRoot] = await Promise.all([realpath(abs), realpath(root)]);
+  } catch {
+    return undefined;
+  }
+  return real === realRoot || real.startsWith(realRoot + '/') ? real : undefined;
 }
 
 export class ProcessFixUseCase {
@@ -95,7 +109,7 @@ export class ProcessFixUseCase {
           logger.warn('Ignoring fix for file outside requested scope', undefined, { filePath: f.filePath });
           continue;
         }
-        const abs = resolveWithinRepo(repoPath, f.filePath);
+        const abs = await resolveWithinRepo(repoPath, f.filePath);
         if (!abs) {
           logger.warn('Ignoring fix with unsafe path', undefined, { filePath: f.filePath });
           continue;
@@ -130,20 +144,31 @@ export class ProcessFixUseCase {
 
       await gitService.push(repoPath, pushUrl, job.headRef);
 
-      await this.postSummary(job, applied, githubClient, gitlabClient);
-
+      // The fix is already committed and pushed at this point — a failure
+      // in the summary comment or notification must not be allowed to
+      // rethrow and trigger a job retry, since a retry would find nothing
+      // left to commit and report the misleading "nothing to commit" outcome
+      // even though the fix already succeeded.
       const totalMs = ms(jobStart);
-      logger.info('Fix job completed', undefined, { jobId: job.jobId, totalDurationMs: totalMs });
+      try {
+        await this.postSummary(job, applied, githubClient, gitlabClient);
+        await notifier?.notifyFixComplete({
+          jobId: job.jobId,
+          provider: job.provider,
+          repoLabel: repoLabel(job),
+          prNumber: (job.prNumber ?? job.mrIid)!,
+          filesFixed: applied,
+          durationMs: totalMs,
+          prUrl: buildPrUrl(job),
+        });
+      } catch (postErr) {
+        logger.warn('Fix pushed successfully but post-push summary/notification failed', undefined, {
+          jobId: job.jobId,
+          reason: postErr instanceof Error ? postErr.message : String(postErr),
+        });
+      }
 
-      await notifier?.notifyFixComplete({
-        jobId: job.jobId,
-        provider: job.provider,
-        repoLabel: repoLabel(job),
-        prNumber: (job.prNumber ?? job.mrIid)!,
-        filesFixed: applied,
-        durationMs: totalMs,
-        prUrl: buildPrUrl(job),
-      });
+      logger.info('Fix job completed', undefined, { jobId: job.jobId, totalDurationMs: totalMs });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       logger.error('Fix job failed', err instanceof Error ? err : new Error(String(err)), {
@@ -191,7 +216,7 @@ export class ProcessFixUseCase {
 
     const results = await Promise.all(
       Array.from(byFile.entries()).map(async ([filePath, issues]): Promise<FixFileInput | undefined> => {
-        const abs = resolveWithinRepo(repoPath, filePath);
+        const abs = await resolveWithinRepo(repoPath, filePath);
         if (!abs) {
           logger.warn('Skipping fix for path outside repo', undefined, { filePath });
           return undefined;

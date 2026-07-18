@@ -20,12 +20,20 @@ function extractPositionFromBody(body: string): { filePath: string; lineNumber: 
 
 export class GitlabService implements IGitlabClient {
   private readonly api: InstanceType<typeof Gitlab>;
+  private botUserIdPromise: Promise<number> | undefined;
 
   constructor() {
     this.api = new Gitlab({
       token: config.GITLAB_ACCESS_TOKEN,
       host: config.GITLAB_API_URL,
     });
+  }
+
+  private async getBotUserId(): Promise<number> {
+    if (!this.botUserIdPromise) {
+      this.botUserIdPromise = this.api.Users.showCurrentUser().then((u) => (u as unknown as { id: number }).id);
+    }
+    return this.botUserIdPromise;
   }
 
   async postReview(options: PostMrReviewOptions): Promise<void> {
@@ -88,13 +96,18 @@ export class GitlabService implements IGitlabClient {
   }
 
   async listOutstandingBotComments(projectId: number, mrIid: number): Promise<OutstandingComment[]> {
+    const botUserId = await this.getBotUserId();
     const discussions = await this.api.MergeRequestDiscussions.all(projectId, mrIid);
 
     const outstanding: OutstandingComment[] = [];
     for (const discussion of discussions) {
-      const notes = (discussion.notes ?? []) as unknown as Array<{ body?: string; resolved?: boolean; position?: { new_path?: string; new_line?: number } }>;
+      const notes = (discussion.notes ?? []) as unknown as Array<{ body?: string; resolved?: boolean; author?: { id?: number }; position?: { new_path?: string; new_line?: number } }>;
       for (const note of notes) {
         const body = note.body ?? '';
+        // Marker string alone is forgeable by any project member — the note
+        // author must also be the bot's own account, or a forged note could
+        // steer /fix into writing attacker-controlled content.
+        if (note.author?.id !== botUserId) continue;
         if (!hasBotMarker(body) || note.resolved) continue;
 
         const position = note.position;

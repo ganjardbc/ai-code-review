@@ -21,11 +21,31 @@ function assertInsideWorkspace(dirPath: string): void {
   }
 }
 
+function redactCredentials(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.username || parsed.password) {
+      parsed.username = '***';
+      parsed.password = '';
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 function isNonFastForwardError(err: unknown): boolean {
   // Deliberately excludes the generic "rejected" substring: branch-protection
   // and pre-receive-hook denials also say "[remote rejected] ... declined"
   // but aren't a real conflict, so retrying via rebase would be pointless.
   return err instanceof GitError && /non-fast-forward|fetch first/i.test(err.message);
+}
+
+async function ensureFullHistory(targetDir: string): Promise<void> {
+  const isShallow = (await runGit(['rev-parse', '--is-shallow-repository'], targetDir)).trim();
+  if (isShallow === 'true') {
+    await runGit(['fetch', '--unshallow', 'origin'], targetDir);
+  }
 }
 
 function runGit(args: string[], cwd: string): Promise<string> {
@@ -62,7 +82,7 @@ export class GitService implements IGitService {
   async clone(repoUrl: string, branch: string, targetDir: string): Promise<void> {
     assertInsideWorkspace(targetDir);
 
-    logger.info('Cloning repository', undefined, { repoUrl, branch });
+    logger.info('Cloning repository', undefined, { repoUrl: redactCredentials(repoUrl), branch });
 
     await runGit(
       [
@@ -107,12 +127,24 @@ export class GitService implements IGitService {
       targetDir,
     );
 
-    const diff = await runGit(
-      ['diff', `origin/${baseBranch}...${headBranch}`, '--', '.'],
-      targetDir,
-    );
-
-    return diff;
+    try {
+      return await runGit(
+        ['diff', `origin/${baseBranch}...${headBranch}`, '--', '.'],
+        targetDir,
+      );
+    } catch (err) {
+      // Shallow history (CLONE_DEPTH) can leave head/base without a common
+      // ancestor for branches that diverged further back. Deepen to full
+      // history and retry once rather than failing or producing a bad diff.
+      logger.warn('Diff failed at shallow depth, retrying with full history', undefined, { baseBranch, headBranch });
+      await ensureFullHistory(targetDir);
+      return runGit(
+        ['diff', `origin/${baseBranch}...${headBranch}`, '--', '.'],
+        targetDir,
+      ).catch(() => {
+        throw err;
+      });
+    }
   }
 
   async commitAll(targetDir: string, message: string): Promise<boolean> {
@@ -151,6 +183,7 @@ export class GitService implements IGitService {
       }
 
       logger.warn('Push rejected — branch moved since clone, rebasing onto latest remote commit', undefined, { branch });
+      await ensureFullHistory(targetDir);
       await runGit(['fetch', '--', remoteUrl, branch], targetDir);
 
       try {
