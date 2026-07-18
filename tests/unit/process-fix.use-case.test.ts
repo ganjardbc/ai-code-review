@@ -267,6 +267,8 @@ describe('ProcessFixUseCase', () => {
 
     expect(deps.gitService.commitAll).not.toHaveBeenCalled();
     expect(deps.gitService.push).not.toHaveBeenCalled();
-    expect(deps.githubClient.postIssueComment).not.toHaveBeenCalled();
+    expect(deps.githubClient.postIssueComment).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: 'myorg', repo: 'myrepo', pullNumber: 42 }),
+    );
   });
 });

@@ -79,6 +79,18 @@ export class ProcessReviewUseCase {
 
       if (reviewResult.comments.length === 0) {
         logger.info('No comments to post', undefined, { jobId: job.jobId });
+        await this.postNoIssuesFeedback(job, githubClient, gitlabClient);
+
+        const totalMs = ms(jobStart);
+        await notifier?.notifyReviewComplete({
+          jobId: job.jobId,
+          provider: job.provider,
+          repoLabel: repoLabel(job),
+          prNumber: (job.prNumber ?? job.mrIid)!,
+          commentCount: 0,
+          durationMs: totalMs,
+          prUrl: buildPrUrl(job),
+        });
         return;
       }
 
@@ -147,6 +159,20 @@ export class ProcessReviewUseCase {
       throw err;
     } finally {
       await workspaceManager.cleanupWorkspace(workspacePath);
+    }
+  }
+
+  private async postNoIssuesFeedback(
+    job: JobPayload,
+    githubClient: IGithubClient,
+    gitlabClient: IGitlabClient,
+  ): Promise<void> {
+    const body = '✅ AI review found no issues in this change.';
+
+    if (job.provider === 'github' && job.repoOwner && job.repoName && job.prNumber) {
+      await githubClient.postIssueComment({ owner: job.repoOwner, repo: job.repoName, pullNumber: job.prNumber, body });
+    } else if (job.provider === 'gitlab' && job.projectId && job.mrIid) {
+      await gitlabClient.postMrNote({ projectId: job.projectId, mrIid: job.mrIid, body });
     }
   }
 }

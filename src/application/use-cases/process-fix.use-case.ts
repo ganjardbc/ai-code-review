@@ -58,6 +58,8 @@ export class ProcessFixUseCase {
 
       if (outstanding.length === 0) {
         logger.info('No outstanding AI comments to fix', undefined, { jobId: job.jobId });
+        await this.postNoFixNeeded(job, githubClient, gitlabClient, 'No outstanding review comments to fix.');
+        await this.notifyNoFixApplied(job, jobStart, notifier);
         return;
       }
 
@@ -66,6 +68,8 @@ export class ProcessFixUseCase {
       const fixInputs = await this.readAffectedFiles(repoPath, outstanding);
       if (fixInputs.length === 0) {
         logger.info('No fixable files found in workspace', undefined, { jobId: job.jobId });
+        await this.postNoFixNeeded(job, githubClient, gitlabClient, 'Outstanding comments reference files not found in the workspace; nothing to fix.');
+        await this.notifyNoFixApplied(job, jobStart, notifier);
         return;
       }
 
@@ -104,6 +108,8 @@ export class ProcessFixUseCase {
 
       if (applied === 0) {
         logger.info('No fixes applied', undefined, { jobId: job.jobId });
+        await this.postNoFixNeeded(job, githubClient, gitlabClient, 'AI could not produce a safe fix for the outstanding comments.');
+        await this.notifyNoFixApplied(job, jobStart, notifier);
         return;
       }
 
@@ -113,6 +119,8 @@ export class ProcessFixUseCase {
       );
       if (!committed) {
         logger.info('Nothing to commit after applying fixes', undefined, { jobId: job.jobId });
+        await this.postNoFixNeeded(job, githubClient, gitlabClient, 'AI fixes matched the current file content; nothing to commit.');
+        await this.notifyNoFixApplied(job, jobStart, notifier);
         return;
       }
 
@@ -200,6 +208,33 @@ export class ProcessFixUseCase {
     );
 
     return results.filter((r): r is FixFileInput => r !== undefined);
+  }
+
+  private async postNoFixNeeded(
+    job: JobPayload,
+    githubClient: IGithubClient,
+    gitlabClient: IGitlabClient,
+    reason: string,
+  ): Promise<void> {
+    const body = `ℹ️ /fix: ${reason}`;
+
+    if (job.provider === 'github' && job.repoOwner && job.repoName && job.prNumber) {
+      await githubClient.postIssueComment({ owner: job.repoOwner, repo: job.repoName, pullNumber: job.prNumber, body });
+    } else if (job.provider === 'gitlab' && job.projectId && job.mrIid) {
+      await gitlabClient.postMrNote({ projectId: job.projectId, mrIid: job.mrIid, body });
+    }
+  }
+
+  private async notifyNoFixApplied(job: JobPayload, jobStart: bigint, notifier?: INotifier): Promise<void> {
+    await notifier?.notifyFixComplete({
+      jobId: job.jobId,
+      provider: job.provider,
+      repoLabel: repoLabel(job),
+      prNumber: (job.prNumber ?? job.mrIid)!,
+      filesFixed: 0,
+      durationMs: ms(jobStart),
+      prUrl: buildPrUrl(job),
+    });
   }
 
   private async postSummary(
